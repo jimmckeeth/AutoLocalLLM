@@ -149,9 +149,9 @@ TOOL_FAMILIES = [
     'Llama-3.1', 'Llama-3.2', 'Llama-3.3',
     'Mistral', 'Devstral',
     'Phi-4',
-    'gemma-3',
+    'gemma-3', 'gemma-4',
     'Command-R',
-    'DeepSeek-R1',
+    'DeepSeek-R1', 'DeepSeek-Coder',
 ]
 
 MODEL_DB = {
@@ -192,6 +192,8 @@ MODEL_DB = {
     'google/gemma-3-27b-it': {'gguf': {'repo': 'bartowski/gemma-3-27b-it-GGUF', 'basename': 'gemma-3-27b-it', 'template': ''}, 'ollama': 'gemma3:27b'},
     # Cohere
     'CohereForAI/c4ai-command-r7b-12-2024': {'gguf': {'repo': 'bartowski/c4ai-command-r7b-12-2024-GGUF', 'basename': 'c4ai-command-r7b-12-2024', 'template': ''}, 'ollama': 'command-r7b'},
+    # DeepSeek Coder V2
+    'deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct': {'gguf': {'repo': 'bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF', 'basename': 'DeepSeek-Coder-V2-Lite-Instruct', 'template': ''}, 'ollama': 'deepseek-coder-v2:16b'},
     # DeepSeek R1 distills
     'deepseek-ai/DeepSeek-R1-Distill-Llama-8B':  {'gguf': {'repo': 'bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF',  'basename': 'DeepSeek-R1-Distill-Llama-8B',  'template': 'deepseek-r1'}, 'ollama': 'deepseek-r1:8b'},
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B':   {'gguf': {'repo': 'bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF',   'basename': 'DeepSeek-R1-Distill-Qwen-7B',   'template': 'deepseek-r1'}, 'ollama': 'deepseek-r1:7b'},
@@ -202,19 +204,24 @@ MODEL_DB = {
 def is_tool_capable(hf_id):
     return any(f in hf_id for f in TOOL_FAMILIES)
 
-NON_GGUF_FORMATS = ['GPTQ', 'AWQ', 'EXL2', 'EETQ', 'marlin']
+FORMAT_SUFFIX = re.compile(r'(-GGUF|-FP8|-FP16|-AWQ|-GPTQ|-EXL2|-EETQ|-marlin|-Q\d\S*)$', re.IGNORECASE)
 
 def get_entry(hf_id):
+    # 1. Exact match
     if hf_id in MODEL_DB:
         return MODEL_DB[hf_id]
-    stripped = re.sub(r'(-GGUF|-Q\d.*)$', '', hf_id)
+    # 2. Strip format suffix, exact match
+    stripped = FORMAT_SUFFIX.sub('', hf_id)
     if stripped in MODEL_DB:
         return MODEL_DB[stripped]
-    # For community repos that end in -GGUF, synthesize an entry so the HF repo
-    # path can be passed directly to llama-server --hf-repo.
-    if '-GGUF' in hf_id:
-        basename = re.sub(r'^[^/]+/', '', hf_id)      # strip provider prefix
-        basename = re.sub(r'-GGUF$', '', basename)     # strip -GGUF suffix
+    # 3. Strip provider prefix from stripped name, match any DB key by model name
+    model_name = re.sub(r'^[^/]+/', '', stripped)
+    for key in MODEL_DB:
+        if re.sub(r'^[^/]+/', '', key) == model_name:
+            return MODEL_DB[key]
+    # 4. If original repo ends in -GGUF, synthesize an entry for direct --hf-repo use
+    if hf_id.endswith('-GGUF'):
+        basename = re.sub(r'^[^/]+/', '', hf_id).removesuffix('-GGUF')
         template = 'deepseek-r1' if 'DeepSeek-R1' in hf_id else ''
         return {'gguf': {'repo': hf_id, 'basename': basename, 'template': template}}
     return None
@@ -223,12 +230,9 @@ def build_candidates(models):
     candidates = []
     for m in models:
         hf_id = m.get('name', '')
-        if any(fmt in hf_id for fmt in NON_GGUF_FORMATS):
-            print(f'  Skip (unsupported format): {hf_id}', file=sys.stderr)
-            continue
         entry = get_entry(hf_id)
         if not entry:
-            print(f'  Skip (no DB entry): {hf_id}', file=sys.stderr)
+            print(f'  Skip (no GGUF source): {hf_id}', file=sys.stderr)
             continue
         if not is_tool_capable(hf_id):
             print(f'  Skip (not tool-capable): {hf_id}', file=sys.stderr)
@@ -246,20 +250,18 @@ def build_candidates(models):
             'gguf_basename': gguf.get('basename', ''),
             'template':      gguf.get('template', ''),
             'ollama_tag':    entry.get('ollama', ''),
-            'quantization':  m.get('quantization') or m.get('best_quant') or 'Q4_K_M',
+            'quantization':  m.get('best_quant') or 'Q4_K_M',
             'score':         round(float(m.get('score') or 0), 1),
-            'params':        m.get('params', '?'),
-            'mem_pct':       m.get('memory_percent', '?'),
+            'params':        m.get('params_b', m.get('parameter_count', '?')),
+            'mem_pct':       m.get('utilization_pct', '?'),
         })
     return candidates
 
 def cmd_filter():
     raw = sys.stdin.read()
-    match = re.search(r'(\[.*\])', raw, re.DOTALL)
-    if not match:
-        print('[]'); return
     try:
-        models = json.loads(match.group(1))
+        data = json.loads(raw)
+        models = data['models'] if isinstance(data, dict) and 'models' in data else data
     except json.JSONDecodeError:
         print('[]'); return
     print(json.dumps(build_candidates(models), indent=2))

@@ -114,9 +114,9 @@ $script:ToolCapableFamilies = @(
     'Llama-3.1', 'Llama-3.2', 'Llama-3.3',
     'Mistral', 'Devstral',
     'Phi-4',
-    'gemma-3',
+    'gemma-3', 'gemma-4',
     'Command-R',
-    'DeepSeek-R1'
+    'DeepSeek-R1', 'DeepSeek-Coder'
 )
 
 # Combined mapping: HuggingFace ID -> GGUF info (llama.cpp) + Ollama tag (fallback).
@@ -222,6 +222,11 @@ $script:ModelDb = [ordered]@{
         gguf   = @{ repo='bartowski/c4ai-command-r7b-12-2024-GGUF';          basename='c4ai-command-r7b-12-2024';    template='' }
         ollama = 'command-r7b' }
     # DeepSeek R1 distills ───────────────────────────────────────────────────
+    # DeepSeek Coder V2 ─────────────────────────────────────────────────────────
+    'deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct' = @{
+        gguf   = @{ repo='bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF'; basename='DeepSeek-Coder-V2-Lite-Instruct'; template='' }
+        ollama = 'deepseek-coder-v2:16b' }
+    # DeepSeek R1 distills ───────────────────────────────────────────────────────
     'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'  = @{
         gguf   = @{ repo='bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF';     basename='DeepSeek-R1-Distill-Llama-8B';  template='deepseek-r1' }
         ollama = 'deepseek-r1:8b' }
@@ -236,14 +241,21 @@ $script:ModelDb = [ordered]@{
         ollama = 'deepseek-r1:32b' }
 }
 
+$script:FormatSuffixPattern = '(-GGUF|-FP8|-FP16|-AWQ|-GPTQ|-EXL2|-EETQ|-marlin|-Q\d\S*)$'
+
 function Get-ModelDbEntry {
     param([string]$HfId)
+    # 1. Exact match
     if ($script:ModelDb.Contains($HfId)) { return $script:ModelDb[$HfId] }
-    $stripped = $HfId -replace '-GGUF$', '' -replace '-Q\d.*$', ''
+    # 2. Strip format suffix, exact match
+    $stripped = $HfId -replace $script:FormatSuffixPattern, ''
     if ($script:ModelDb.Contains($stripped)) { return $script:ModelDb[$stripped] }
-    # For any community repo that ends in -GGUF, synthesize an entry so we can
-    # pass the HF repo path directly to llama-server --hf-repo.
-    if ($HfId -match '-GGUF') {
+    # 3. Strip provider prefix from stripped name, match any DB key by model name alone
+    $modelName = $stripped -replace '^[^/]+/', ''
+    $matchKey  = $script:ModelDb.Keys | Where-Object { ($_ -replace '^[^/]+/', '') -eq $modelName } | Select-Object -First 1
+    if ($matchKey) { return $script:ModelDb[$matchKey] }
+    # 4. If original repo ends in -GGUF, synthesize an entry for direct --hf-repo use
+    if ($HfId -match '-GGUF$') {
         $basename = ($HfId -replace '^[^/]+/', '') -replace '-GGUF$', ''
         $tmpl     = if ($HfId -match 'DeepSeek-R1') { 'deepseek-r1' } else { '' }
         return @{ gguf = @{ repo = $HfId; basename = $basename; template = $tmpl } }
@@ -455,27 +467,24 @@ function Get-CodingCandidates {
     if ($LASTEXITCODE -ne 0) { throw "LlmFit exited with code ${LASTEXITCODE}:`n$stderr" }
 
     $jsonText = ($raw -join "`n")
-    if ($jsonText -match '(?s)(\[.*?\])') { $jsonText = $Matches[1] }
 
-    try   { $models = $jsonText | ConvertFrom-Json }
+    try {
+        $parsed = $jsonText | ConvertFrom-Json
+        $models = if ($parsed.PSObject.Properties['models']) { $parsed.models } else { $parsed }
+    }
     catch { throw "Could not parse LlmFit JSON output.`nRaw:`n$raw" }
     if (-not $models -or $models.Count -eq 0) { throw 'LlmFit returned an empty model list.' }
 
     Write-Info "LlmFit returned $($models.Count) result(s); filtering for coding + tool-use"
 
-    $script:NonGgufPatterns = @('GPTQ', 'AWQ', 'EXL2', 'EETQ', 'marlin')
-
     $candidates = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($m in $models) {
         $hfId    = $m.name
-        if ($script:NonGgufPatterns | Where-Object { $hfId -match $_ }) {
-            Write-Info "  Skip (unsupported format): $hfId"; continue
-        }
         $canTool = Test-ToolCapable -HfId $hfId
         $entry   = Get-ModelDbEntry -HfId $hfId
 
         if (-not $canTool)  { Write-Info "  Skip (not tool-capable): $hfId"; continue }
-        if (-not $entry)    { Write-Info "  Skip (no DB entry):      $hfId"; continue }
+        if (-not $entry)    { Write-Info "  Skip (no GGUF source):   $hfId"; continue }
 
         $runner = Get-PreferredRunner -DbEntry $entry
         if (-not $runner)   { Write-Info "  Skip (no runner):        $hfId"; continue }
@@ -489,11 +498,11 @@ function Get-CodingCandidates {
             GgufBasename = if ($ggufInfo) { $ggufInfo.basename } else { '' }
             Template     = if ($ggufInfo) { $ggufInfo.template } else { '' }
             OllamaTag    = if ($entry.ContainsKey('ollama')) { $entry['ollama'] } else { '' }
-            Quantization = if ($m.quantization) { $m.quantization } elseif ($m.best_quant) { $m.best_quant } else { 'Q4_K_M' }
+            Quantization = if ($m.best_quant) { $m.best_quant } else { 'Q4_K_M' }
             Score        = $m.score
-            Params       = $m.params
-            Fit          = $m.fit
-            MemPct       = $m.memory_percent
+            Params       = if ($m.params_b) { $m.params_b } else { $m.parameter_count }
+            Fit          = $m.fit_level
+            MemPct       = $m.utilization_pct
         })
     }
 

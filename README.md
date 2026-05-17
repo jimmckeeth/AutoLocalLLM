@@ -1,23 +1,28 @@
 # AutoLocalLLM
 
-> One PowerShell script to find, download, and configure the best local AI coding assistant for your hardware.
+> One command to find, download, and configure the best local AI coding assistant for your hardware — Windows and Linux.
 
-`Setup-OpenCode-LLM.ps1` chains three tools together:
+Both scripts chain the same three tools together:
 
 1. **[LlmFit](https://github.com/AlexsJones/llmfit)** — scans your RAM, VRAM, and CPU and ranks which LLMs will actually run well on your machine, filtered specifically for *coding* and *tool-use* capability.
 2. **[llama.cpp](https://github.com/ggml-org/llama.cpp)** (primary) / **[Ollama](https://ollama.com)** (fallback) — downloads the GGUF model and serves an OpenAI-compatible API locally.
 3. **[OpenCode](https://opencode.ai)** — a terminal AI coding agent that connects to that local API, giving you a fully offline, private coding assistant.
 
+| Script | Platform |
+|--------|----------|
+| `Setup-OpenCode-LLM.ps1` | Windows 10/11 (PowerShell 5.1+) |
+| `setup-opencode-llm.sh`  | Debian · Ubuntu · Fedora · NixOS |
+
 ---
 
 ## Requirements
 
-| Tool | Minimum | Notes |
-|------|---------|-------|
-| Windows | 10 / 11 | PowerShell 5.1+ (built-in) |
-| RAM | 8 GB | 16 GB+ recommended for 7–8 B models |
-| Disk | 5–50 GB | Depends on model size |
-| GPU | optional | NVIDIA / AMD / Intel; CPU-only also works |
+| | Minimum | Notes |
+|--|---------|-------|
+| **OS** | Windows 10/11 **or** Debian/Ubuntu/Fedora/NixOS | |
+| **RAM** | 8 GB | 16 GB+ recommended for 7–8 B models |
+| **Disk** | 5–50 GB | Depends on model size |
+| **GPU** | optional | NVIDIA CUDA · AMD ROCm/Vulkan · Intel · CPU-only |
 
 The script installs missing dependencies automatically. You can also install them manually first — see [Manual Setup](#manual-setup) below.
 
@@ -25,20 +30,29 @@ The script installs missing dependencies automatically. You can also install the
 
 ## Quick Start
 
+### Windows (PowerShell)
+
 ```powershell
 # Run from an elevated PowerShell window (required for global npm installs)
 Set-ExecutionPolicy RemoteSigned -Scope CurrentUser   # once, if needed
 .\Setup-OpenCode-LLM.ps1
 ```
 
-That's it. The script will:
+### Linux (Debian · Ubuntu · Fedora · NixOS)
 
-- Install [Scoop](https://scoop.sh), [llama.cpp](https://github.com/ggml-org/llama.cpp/releases), [LlmFit](https://github.com/AlexsJones/llmfit), and [OpenCode](https://opencode.ai) if any are missing
+```bash
+chmod +x setup-opencode-llm.sh
+./setup-opencode-llm.sh
+```
+
+Both scripts do the same thing:
+
+- Install missing dependencies (llama.cpp, LlmFit, OpenCode — and Scoop on Windows)
 - Ask LlmFit which coding + tool-use models fit your hardware
-- Auto-select the highest-ranked model and download its GGUF via llama-server
+- Auto-select the highest-ranked model; llama-server downloads its GGUF from HuggingFace
 - Start `llama-server` with Jinja tool-calling enabled
 - Write `~/.config/opencode/config.json` with the local provider
-- Generate `%LOCALAPPDATA%\llama.cpp\Start-LlamaServer.ps1` for future restarts
+- Generate a startup helper script for future restarts
 
 Once finished, open a new terminal and run:
 
@@ -52,16 +66,20 @@ Press **Ctrl+K** inside OpenCode, then select the model under **llama-cpp** (or 
 
 ## Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `-Manual` | off | Show a ranked table of candidates and pick a model interactively |
-| `-TopN` | `10` | Number of models to request from LlmFit before filtering |
-| `-ContextSize` | `16384` | Context window size (tokens) passed to the model server |
-| `-Port` | `8080` | Port llama-server listens on (ignored when using Ollama) |
-| `-HfToken` | _(none)_ | HuggingFace token for gated models (e.g. Meta Llama) |
-| `-Force` | off | Re-download and overwrite config even if already present |
+Both scripts support the same options (PowerShell uses `-Flag Value`; bash uses `--flag value`):
+
+| PowerShell | Bash | Default | Description |
+|---|---|---|---|
+| `-Manual` | `--manual` | off | Show ranked table; pick a model interactively |
+| `-TopN` | `--top-n` | `10` | Candidates to request from LlmFit |
+| `-ContextSize` | `--context` | `16384` | Context window size (tokens) |
+| `-Port` | `--port` | `8080` | llama-server port (ignored for Ollama) |
+| `-HfToken` | `--hf-token` | _(none)_ | HuggingFace token for gated models |
+| `-Force` | `--force` | off | Re-download and overwrite config |
 
 ### Examples
+
+**PowerShell (Windows):**
 
 ```powershell
 # Automatic — best model for your hardware, no prompts
@@ -78,6 +96,25 @@ Press **Ctrl+K** inside OpenCode, then select the model under **llama-cpp** (or 
 
 # Force a fresh download and config overwrite
 .\Setup-OpenCode-LLM.ps1 -Force
+```
+
+**Bash (Linux):**
+
+```bash
+# Automatic
+./setup-opencode-llm.sh
+
+# Interactive
+./setup-opencode-llm.sh --manual
+
+# Wider pool + larger context
+./setup-opencode-llm.sh --manual --top-n 20 --context 32768
+
+# Gated model
+./setup-opencode-llm.sh --hf-token hf_xxxxxxxxxxxxxxxxxxxxxxxx
+
+# Force re-download
+./setup-opencode-llm.sh --force
 ```
 
 ---
@@ -120,12 +157,14 @@ When `-Manual` is set, a ranked table is printed before any download begins:
 
 ## Generated Files
 
-| Path | Purpose |
-|------|---------|
-| `~/.config/opencode/config.json` | OpenCode provider config (created/merged) |
-| `%LOCALAPPDATA%\llama.cpp\bin\` | llama-server and supporting binaries |
-| `%LOCALAPPDATA%\llama.cpp\Start-LlamaServer.ps1` | Startup helper — run this after a reboot |
-| `~/.cache/huggingface\hub\` | HuggingFace model cache (managed by llama-server) |
+| Path | Platform | Purpose |
+|------|----------|---------|
+| `~/.config/opencode/config.json` | Both | OpenCode provider config (created/merged) |
+| `%LOCALAPPDATA%\llama.cpp\bin\` | Windows | llama-server binaries |
+| `%LOCALAPPDATA%\llama.cpp\Start-LlamaServer.ps1` | Windows | Startup helper after reboot |
+| `~/.local/bin/llama-server` | Linux | llama-server binary |
+| `~/.local/share/autolocalllm/start-llama-server.sh` | Linux | Startup helper after reboot |
+| `~/.cache/huggingface/hub/` | Both | HuggingFace model cache (managed by llama-server) |
 
 ### OpenCode config (`llama.cpp` runner)
 
@@ -179,11 +218,17 @@ When `-Manual` is set, a ranked table is printed before any download begins:
 
 `llama-server` and Ollama are not set to auto-start. Before using OpenCode after a reboot, run the generated startup script:
 
+**Windows:**
 ```powershell
 & "$env:LOCALAPPDATA\llama.cpp\Start-LlamaServer.ps1"
 ```
 
-Leave that window open while you use `opencode`.
+**Linux:**
+```bash
+bash ~/.local/share/autolocalllm/start-llama-server.sh
+```
+
+Leave that terminal open while you use `opencode`.
 
 ---
 
@@ -191,7 +236,7 @@ Leave that window open while you use `opencode`.
 
 If you prefer to install and configure each tool yourself, follow the steps below.
 
-### 1 — Install Scoop (Windows package manager)
+### 1 — Install a package manager (Windows only)
 
 ```powershell
 Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
@@ -200,27 +245,33 @@ Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
 
 Docs: [scoop.sh](https://scoop.sh) · [GitHub](https://github.com/ScoopInstaller/Scoop)
 
+Linux uses the native package manager (apt / dnf / nix); no extra step needed.
+
 ---
 
 ### 2 — Install LlmFit
 
+**Windows:**
 ```powershell
 scoop install llmfit
 ```
 
-Or download the latest Windows binary from the [Releases page](https://github.com/AlexsJones/llmfit/releases), extract the zip, and add the folder to your `PATH`.
+**Linux — download from GitHub Releases:**
+```bash
+# x86_64
+curl -fsSL -o /tmp/llmfit.tar.gz \
+  "$(curl -s https://api.github.com/repos/AlexsJones/llmfit/releases/latest \
+   | python3 -c "import json,sys; [print(a['browser_download_url']) for a in json.load(sys.stdin)['assets'] if 'x86_64' in a['name'] and 'linux' in a['name']]" | head -1)"
+tar -xzf /tmp/llmfit.tar.gz -C ~/.local/bin/
+chmod +x ~/.local/bin/llmfit
+```
 
 **Find the best coding models for your hardware:**
 
-```powershell
-# Interactive TUI (default)
-llmfit
-
-# CLI table — top 10 coding models
-llmfit fit --use-case coding --cli -n 10
-
-# JSON output for scripting
-llmfit recommend --json --use-case coding --limit 10
+```bash
+llmfit                                          # interactive TUI
+llmfit fit --use-case coding --cli -n 10        # CLI table
+llmfit recommend --json --use-case coding --limit 10  # JSON for scripting
 ```
 
 Docs: [llmfit README](https://github.com/AlexsJones/llmfit/blob/main/README.md) · [llmfit.org](https://www.llmfit.org/)
@@ -229,11 +280,37 @@ Docs: [llmfit README](https://github.com/AlexsJones/llmfit/blob/main/README.md) 
 
 ### 3 — Install llama.cpp
 
+**Windows:**
 ```powershell
 scoop install llama
 ```
 
-Or download a pre-built Windows binary from [Releases](https://github.com/ggml-org/llama.cpp/releases):
+**Linux — Fedora:**
+```bash
+sudo dnf install llama-cpp
+```
+
+**Linux — NixOS / Nix:**
+```bash
+nix profile install nixpkgs#llama-cpp
+```
+
+**Linux — Debian/Ubuntu (pre-built binary):**
+
+Download from [Releases](https://github.com/ggml-org/llama.cpp/releases):
+
+| Your GPU | Asset to download |
+|----------|-------------------|
+| NVIDIA CUDA | `llama-bXXXX-bin-ubuntu-cuda-12.4-x64.tar.gz` |
+| AMD ROCm | `llama-bXXXX-bin-ubuntu-rocm-7.2-x64.tar.gz` |
+| Vulkan / CPU | `llama-bXXXX-bin-ubuntu-vulkan-x64.tar.gz` |
+
+```bash
+tar -xzf llama-bXXXX-bin-ubuntu-x64.tar.gz -C ~/.local/bin/
+chmod +x ~/.local/bin/llama-server
+```
+
+**Windows — download manually:**
 
 | Your GPU | Asset to download |
 |----------|-------------------|
@@ -271,24 +348,33 @@ Docs: [llama-server README](https://github.com/ggml-org/llama.cpp/blob/master/to
 
 ### 4 — Install Ollama (optional fallback)
 
+**Windows:**
 ```powershell
 scoop install ollama
-# or download from https://ollama.com/download
+# or download the installer from https://ollama.com/download
+```
+
+**Linux — all distros:**
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+**Linux — NixOS / Nix:**
+```bash
+nix profile install nixpkgs#ollama
 ```
 
 **Pull a model and create a context-extended variant:**
 
-```powershell
+```bash
 ollama pull qwen3:8b
 
-# Increase context window for better tool-call reliability
-$modelfile = "FROM qwen3:8b`nPARAMETER num_ctx 16384"
-$modelfile | ollama create qwen3-8b-ctx16k -f -
+# Increase context window for reliable tool-call support
+printf 'FROM qwen3:8b\nPARAMETER num_ctx 16384\n' | ollama create qwen3-8b-ctx16k -f -
 ```
 
 **Start the daemon:**
-
-```powershell
+```bash
 ollama serve
 ```
 
@@ -298,12 +384,27 @@ Docs: [ollama.com/docs](https://github.com/ollama/ollama/blob/main/docs/README.m
 
 ### 5 — Install OpenCode
 
+**Windows:**
 ```powershell
-# via npm (recommended)
-npm install --global opencode-ai@latest
+npm install --global opencode-ai@latest   # recommended
+scoop install opencode                     # alternative
+```
 
-# or via Scoop
-scoop install opencode
+**Linux — all distros (Node.js v20+ required):**
+```bash
+# Debian/Ubuntu: install Node.js v20 via NodeSource first
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Fedora
+curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+sudo dnf install -y nodejs
+
+# NixOS / Nix
+nix profile install nixpkgs#nodejs_20
+
+# Then install OpenCode (all distros)
+npm install --global opencode-ai@latest
 ```
 
 Docs: [opencode.ai](https://opencode.ai) · [GitHub](https://github.com/sst/opencode)
@@ -401,10 +502,35 @@ Meta Llama and some others require accepting a license on HuggingFace first:
 1. Log in at [huggingface.co](https://huggingface.co)
 2. Visit the model page and click **Accept** on the license
 3. Create an access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-4. Pass it with: `.\Setup-OpenCode-LLM.ps1 -HfToken hf_xxx`
+4. Pass it with:
+   - Windows: `.\Setup-OpenCode-LLM.ps1 -HfToken hf_xxx`
+   - Linux: `./setup-opencode-llm.sh --hf-token hf_xxx`
 
 **Out of memory / model won't load**
-Run `llmfit fit --use-case coding --cli` and look at the **Fit** column. Choose a model rated **Good** or **Perfect**, or reduce `-ContextSize`.
+Run `llmfit fit --use-case coding --cli` and look at the **Fit** column. Choose a model rated **Good** or **Perfect**, or reduce the context size (`-ContextSize` / `--context`).
+
+**Linux: `llama-server` not found after install**
+The binary is placed in `~/.local/bin/`. Make sure that directory is on your `PATH`:
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**Linux: `permission denied` running the script**
+```bash
+chmod +x setup-opencode-llm.sh
+./setup-opencode-llm.sh
+```
+
+**NixOS: `nix profile install` fails**
+Try the legacy interface: `nix-env -iA nixpkgs.llama-cpp`. On NixOS you may prefer adding packages to your `configuration.nix` instead.
+
+**Linux: `opencode` not found after npm install**
+npm global binaries land in `$(npm prefix -g)/bin`. Add it to PATH:
+```bash
+echo 'export PATH="$(npm prefix -g)/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
 
 ---
 
@@ -425,7 +551,8 @@ Run `llmfit fit --use-case coding --cli` and look at the **Fit** column. Choose 
 | OpenCode GitHub | https://github.com/sst/opencode |
 | OpenCode providers docs | https://opencode.ai/docs/providers/ |
 | bartowski GGUF repos | https://huggingface.co/bartowski |
-| Scoop | https://scoop.sh |
+| Scoop (Windows) | https://scoop.sh |
+| NodeSource (Linux Node.js) | https://github.com/nodesource/distributions |
 | HuggingFace tokens | https://huggingface.co/settings/tokens |
 
 ---

@@ -141,118 +141,40 @@ TMP_FILES+=("$PYTHON_HELPER")
 
 cat > "$PYTHON_HELPER" << 'PYEOF'
 #!/usr/bin/env python3
-"""AutoLocalLLM helper — model DB, LlmFit filtering, table display, config writer."""
-import json, re, sys, os
+"""AutoLocalLLM helper — LlmFit filtering, table display, config writer."""
+import json, sys, os
 
-TOOL_FAMILIES = [
-    'Qwen3', 'Qwen2.5-Coder', 'QwQ',
-    'Llama-3.1', 'Llama-3.2', 'Llama-3.3',
-    'Mistral', 'Devstral',
-    'Phi-4',
-    'gemma-3', 'gemma-4',
-    'Command-R',
-    'DeepSeek-R1', 'DeepSeek-Coder',
-]
-
-MODEL_DB = {
-    # Qwen3
-    'Qwen/Qwen3-0.6B':   {'gguf': {'repo': 'bartowski/Qwen_Qwen3-0.6B-GGUF',   'basename': 'Qwen3-0.6B',   'template': ''}, 'ollama': 'qwen3:0.6b'},
-    'Qwen/Qwen3-1.7B':   {'gguf': {'repo': 'bartowski/Qwen_Qwen3-1.7B-GGUF',   'basename': 'Qwen3-1.7B',   'template': ''}, 'ollama': 'qwen3:1.7b'},
-    'Qwen/Qwen3-4B':     {'gguf': {'repo': 'bartowski/Qwen_Qwen3-4B-GGUF',     'basename': 'Qwen3-4B',     'template': ''}, 'ollama': 'qwen3:4b'},
-    'Qwen/Qwen3-8B':     {'gguf': {'repo': 'bartowski/Qwen_Qwen3-8B-GGUF',     'basename': 'Qwen3-8B',     'template': ''}, 'ollama': 'qwen3:8b'},
-    'Qwen/Qwen3-14B':    {'gguf': {'repo': 'bartowski/Qwen_Qwen3-14B-GGUF',    'basename': 'Qwen3-14B',    'template': ''}, 'ollama': 'qwen3:14b'},
-    'Qwen/Qwen3-30B-A3B':{'gguf': {'repo': 'bartowski/Qwen_Qwen3-30B-A3B-GGUF','basename': 'Qwen3-30B-A3B','template': ''}, 'ollama': 'qwen3:30b-a3b'},
-    'Qwen/Qwen3-32B':    {'gguf': {'repo': 'bartowski/Qwen_Qwen3-32B-GGUF',    'basename': 'Qwen3-32B',    'template': ''}, 'ollama': 'qwen3:32b'},
-    # Qwen2.5 Coder
-    'Qwen/Qwen2.5-Coder-1.5B-Instruct': {'gguf': {'repo': 'bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF', 'basename': 'Qwen2.5-Coder-1.5B-Instruct', 'template': ''}, 'ollama': 'qwen2.5-coder:1.5b'},
-    'Qwen/Qwen2.5-Coder-3B-Instruct':   {'gguf': {'repo': 'bartowski/Qwen2.5-Coder-3B-Instruct-GGUF',   'basename': 'Qwen2.5-Coder-3B-Instruct',   'template': ''}, 'ollama': 'qwen2.5-coder:3b'},
-    'Qwen/Qwen2.5-Coder-7B-Instruct':   {'gguf': {'repo': 'bartowski/Qwen2.5-Coder-7B-Instruct-GGUF',   'basename': 'Qwen2.5-Coder-7B-Instruct',   'template': ''}, 'ollama': 'qwen2.5-coder:7b'},
-    'Qwen/Qwen2.5-Coder-14B-Instruct':  {'gguf': {'repo': 'bartowski/Qwen2.5-Coder-14B-Instruct-GGUF',  'basename': 'Qwen2.5-Coder-14B-Instruct',  'template': ''}, 'ollama': 'qwen2.5-coder:14b'},
-    'Qwen/Qwen2.5-Coder-32B-Instruct':  {'gguf': {'repo': 'bartowski/Qwen2.5-Coder-32B-Instruct-GGUF',  'basename': 'Qwen2.5-Coder-32B-Instruct',  'template': ''}, 'ollama': 'qwen2.5-coder:32b'},
-    # QwQ
-    'Qwen/QwQ-32B': {'gguf': {'repo': 'bartowski/QwQ-32B-GGUF', 'basename': 'QwQ-32B', 'template': ''}, 'ollama': 'qwq:32b'},
-    # Llama 3.x
-    'meta-llama/Llama-3.2-1B-Instruct':  {'gguf': {'repo': 'bartowski/Llama-3.2-1B-Instruct-GGUF',       'basename': 'Llama-3.2-1B-Instruct',       'template': ''}, 'ollama': 'llama3.2:1b'},
-    'meta-llama/Llama-3.2-3B-Instruct':  {'gguf': {'repo': 'bartowski/Llama-3.2-3B-Instruct-GGUF',       'basename': 'Llama-3.2-3B-Instruct',       'template': ''}, 'ollama': 'llama3.2:3b'},
-    'meta-llama/Llama-3.1-8B-Instruct':  {'gguf': {'repo': 'bartowski/Meta-Llama-3.1-8B-Instruct-GGUF',  'basename': 'Meta-Llama-3.1-8B-Instruct',  'template': ''}, 'ollama': 'llama3.1:8b'},
-    'meta-llama/Llama-3.1-70B-Instruct': {'gguf': {'repo': 'bartowski/Meta-Llama-3.1-70B-Instruct-GGUF', 'basename': 'Meta-Llama-3.1-70B-Instruct', 'template': ''}, 'ollama': 'llama3.1:70b'},
-    'meta-llama/Llama-3.3-70B-Instruct': {'gguf': {'repo': 'bartowski/Llama-3.3-70B-Instruct-GGUF',      'basename': 'Llama-3.3-70B-Instruct',      'template': ''}, 'ollama': 'llama3.3:70b'},
-    # Mistral / Devstral
-    'mistralai/Mistral-7B-Instruct-v0.3':   {'gguf': {'repo': 'bartowski/Mistral-7B-Instruct-v0.3-GGUF',   'basename': 'Mistral-7B-Instruct-v0.3',   'template': ''}, 'ollama': 'mistral:7b'},
-    'mistralai/Mistral-Nemo-Instruct-2407': {'gguf': {'repo': 'bartowski/Mistral-Nemo-Instruct-2407-GGUF', 'basename': 'Mistral-Nemo-Instruct-2407', 'template': ''}, 'ollama': 'mistral-nemo'},
-    'mistralai/Devstral-Small-2505':        {'gguf': {'repo': 'bartowski/Devstral-Small-2505-GGUF',         'basename': 'Devstral-Small-2505',         'template': ''}, 'ollama': 'devstral:24b'},
-    # Phi-4
-    'microsoft/Phi-4':               {'gguf': {'repo': 'bartowski/Phi-4-GGUF',               'basename': 'Phi-4',               'template': ''}, 'ollama': 'phi4'},
-    'microsoft/phi-4-mini-instruct': {'gguf': {'repo': 'bartowski/phi-4-mini-instruct-GGUF', 'basename': 'phi-4-mini-instruct', 'template': ''}, 'ollama': 'phi4-mini'},
-    # Gemma 3
-    'google/gemma-3-1b-it':  {'gguf': {'repo': 'bartowski/gemma-3-1b-it-GGUF',  'basename': 'gemma-3-1b-it',  'template': ''}, 'ollama': 'gemma3:1b'},
-    'google/gemma-3-4b-it':  {'gguf': {'repo': 'bartowski/gemma-3-4b-it-GGUF',  'basename': 'gemma-3-4b-it',  'template': ''}, 'ollama': 'gemma3:4b'},
-    'google/gemma-3-9b-it':  {'gguf': {'repo': 'bartowski/gemma-3-9b-it-GGUF',  'basename': 'gemma-3-9b-it',  'template': ''}, 'ollama': 'gemma3:9b'},
-    'google/gemma-3-12b-it': {'gguf': {'repo': 'bartowski/gemma-3-12b-it-GGUF', 'basename': 'gemma-3-12b-it', 'template': ''}, 'ollama': 'gemma3:12b'},
-    'google/gemma-3-27b-it': {'gguf': {'repo': 'bartowski/gemma-3-27b-it-GGUF', 'basename': 'gemma-3-27b-it', 'template': ''}, 'ollama': 'gemma3:27b'},
-    # Cohere
-    'CohereForAI/c4ai-command-r7b-12-2024': {'gguf': {'repo': 'bartowski/c4ai-command-r7b-12-2024-GGUF', 'basename': 'c4ai-command-r7b-12-2024', 'template': ''}, 'ollama': 'command-r7b'},
-    # DeepSeek Coder V2
-    'deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct': {'gguf': {'repo': 'bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF', 'basename': 'DeepSeek-Coder-V2-Lite-Instruct', 'template': ''}, 'ollama': 'deepseek-coder-v2:16b'},
-    # DeepSeek R1 distills
-    'deepseek-ai/DeepSeek-R1-Distill-Llama-8B':  {'gguf': {'repo': 'bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF',  'basename': 'DeepSeek-R1-Distill-Llama-8B',  'template': 'deepseek-r1'}, 'ollama': 'deepseek-r1:8b'},
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B':   {'gguf': {'repo': 'bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF',   'basename': 'DeepSeek-R1-Distill-Qwen-7B',   'template': 'deepseek-r1'}, 'ollama': 'deepseek-r1:7b'},
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B':  {'gguf': {'repo': 'bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF',  'basename': 'DeepSeek-R1-Distill-Qwen-14B',  'template': 'deepseek-r1'}, 'ollama': 'deepseek-r1:14b'},
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B':  {'gguf': {'repo': 'bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF',  'basename': 'DeepSeek-R1-Distill-Qwen-32B',  'template': 'deepseek-r1'}, 'ollama': 'deepseek-r1:32b'},
-}
-
-def is_tool_capable(hf_id):
-    return any(f in hf_id for f in TOOL_FAMILIES)
-
-FORMAT_SUFFIX = re.compile(r'(-GGUF|-FP8|-FP16|-AWQ|-GPTQ|-EXL2|-EETQ|-marlin|-Q\d\S*)$', re.IGNORECASE)
-
-def get_entry(hf_id):
-    # 1. Exact match
-    if hf_id in MODEL_DB:
-        return MODEL_DB[hf_id]
-    # 2. Strip format suffix, exact match
-    stripped = FORMAT_SUFFIX.sub('', hf_id)
-    if stripped in MODEL_DB:
-        return MODEL_DB[stripped]
-    # 3. Strip provider prefix from stripped name, match any DB key by model name
-    model_name = re.sub(r'^[^/]+/', '', stripped)
-    for key in MODEL_DB:
-        if re.sub(r'^[^/]+/', '', key) == model_name:
-            return MODEL_DB[key]
-    # 4. If original repo ends in -GGUF, synthesize an entry for direct --hf-repo use
-    if hf_id.endswith('-GGUF'):
-        basename = re.sub(r'^[^/]+/', '', hf_id).removesuffix('-GGUF')
-        template = 'deepseek-r1' if 'DeepSeek-R1' in hf_id else ''
-        return {'gguf': {'repo': hf_id, 'basename': basename, 'template': template}}
-    return None
+PREF_PROVIDERS = ['bartowski', 'unsloth', 'mradermacher']
 
 def build_candidates(models):
     candidates = []
     for m in models:
-        hf_id = m.get('name', '')
-        entry = get_entry(hf_id)
-        if not entry:
+        hf_id   = m.get('name', '')
+        sources = m.get('gguf_sources') or []
+        if not sources:
             print(f'  Skip (no GGUF source): {hf_id}', file=sys.stderr)
             continue
-        if not is_tool_capable(hf_id):
-            print(f'  Skip (not tool-capable): {hf_id}', file=sys.stderr)
-            continue
-        runner = 'llamacpp' if entry.get('gguf') else ('ollama' if entry.get('ollama') else None)
-        if not runner:
-            print(f'  Skip (no runner): {hf_id}', file=sys.stderr)
-            continue
-        gguf = entry.get('gguf') or {}
+        source = None
+        for prov in PREF_PROVIDERS:
+            source = next((s for s in sources if s.get('provider') == prov), None)
+            if source:
+                break
+        if not source:
+            source = sources[0]
+        repo     = source['repo']
+        basename = repo.split('/')[-1].removesuffix('-GGUF')
+        quant    = m.get('best_quant') or 'Q4_K_M'
         candidates.append({
             'index':         len(candidates) + 1,
             'hf_id':         hf_id,
-            'runner':        runner,
-            'gguf_repo':     gguf.get('repo', ''),
-            'gguf_basename': gguf.get('basename', ''),
-            'template':      gguf.get('template', ''),
-            'ollama_tag':    entry.get('ollama', ''),
-            'quantization':  m.get('best_quant') or 'Q4_K_M',
+            'runner':        'llamacpp',
+            'gguf_repo':     repo,
+            'gguf_basename': basename,
+            'template':      '',
+            'ollama_tag':    '',
+            'quantization':  quant,
             'score':         round(float(m.get('score') or 0), 1),
-            'params':        m.get('params_b', m.get('parameter_count', '?')),
+            'params':        m.get('params_b'),
             'mem_pct':       m.get('utilization_pct', '?'),
         })
     return candidates
@@ -284,8 +206,8 @@ def cmd_table():
             label = label[:W - 1] + '…'
         color = '\033[33m' if c['index'] == 1 else '\033[90m'
         reset = '\033[0m'
-        params = f"{c['params']}B" if c['params'] != '?' else '?'
-        mem    = f"{c['mem_pct']}%" if c['mem_pct'] != '?' else '?'
+        params = f"{round(float(c['params']), 1)}B" if c['params'] is not None else '?'
+        mem    = f"{c['mem_pct']}%" if c['mem_pct'] is not None else '?'
         print(f'  {color}{c["index"]:<3} | {label:<{W}} | {params:<7} | {c["score"]:<5} | {mem:<5} | {runner:<9}{reset}')
     print(f'  {div}\n')
 
@@ -606,15 +528,15 @@ get_candidates() {
     step "Querying LlmFit: top ${TOP_N} coding models for this hardware"
 
     local raw
-    raw=$(llmfit recommend --json --use-case coding --limit "$TOP_N" 2>&1) \
+    raw=$(llmfit recommend --json --use-case coding --capability tool_use --runtime llamacpp --min-fit good --limit "$TOP_N" 2>&1) \
         || die "LlmFit failed (exit $?). Output: ${raw}"
 
     CANDIDATES_JSON=$(echo "$raw" | py filter)
     local count
     count=$(echo "$CANDIDATES_JSON" | py len)
 
-    info "Found ${count} tool-capable candidate(s) after filtering"
-    [[ "$count" -eq 0 ]] && die "No candidates found. Try --top-n 20 or add models to MODEL_DB."
+    info "Found ${count} candidate(s)"
+    [[ "$count" -eq 0 ]] && die "No candidates found. Try --top-n 30 or check that llmfit supports your hardware."
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -898,7 +820,7 @@ main() {
     runner=$(sel runner)
     hf_id=$(sel hf_id)
 
-    printf "\n  ${BOLD}Chosen model${RESET}\n"
+    printf "\n  Chosen model\n"
     info "HuggingFace : ${hf_id}"
     info "Runner      : ${runner}"
     if [[ "$runner" == "llamacpp" ]]; then

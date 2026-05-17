@@ -105,180 +105,6 @@ function Test-CommandExists {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Model knowledge-base
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Substring patterns in HF IDs that indicate function-calling / tool-use support.
-$script:ToolCapableFamilies = @(
-    'Qwen3', 'Qwen2.5-Coder', 'QwQ',
-    'Llama-3.1', 'Llama-3.2', 'Llama-3.3',
-    'Mistral', 'Devstral',
-    'Phi-4',
-    'gemma-3', 'gemma-4',
-    'Command-R',
-    'DeepSeek-R1', 'DeepSeek-Coder'
-)
-
-# Combined mapping: HuggingFace ID -> GGUF info (llama.cpp) + Ollama tag (fallback).
-# Runner priority: llama.cpp when 'gguf' is present, Ollama otherwise.
-# 'gguf.repo'     : bartowski GGUF repo on HuggingFace
-# 'gguf.basename' : GGUF filename stem  ({basename}-{quant}.gguf)
-# 'gguf.template' : chat template hint for --chat-template (empty = auto-detect)
-# 'ollama'        : Ollama registry tag used by `ollama pull`
-$script:ModelDb = [ordered]@{
-    # Qwen3 ──────────────────────────────────────────────────────────────────
-    'Qwen/Qwen3-0.6B'                           = @{
-        gguf   = @{ repo='bartowski/Qwen_Qwen3-0.6B-GGUF';                   basename='Qwen3-0.6B';                  template='' }
-        ollama = 'qwen3:0.6b' }
-    'Qwen/Qwen3-1.7B'                           = @{
-        gguf   = @{ repo='bartowski/Qwen_Qwen3-1.7B-GGUF';                   basename='Qwen3-1.7B';                  template='' }
-        ollama = 'qwen3:1.7b' }
-    'Qwen/Qwen3-4B'                             = @{
-        gguf   = @{ repo='bartowski/Qwen_Qwen3-4B-GGUF';                     basename='Qwen3-4B';                    template='' }
-        ollama = 'qwen3:4b' }
-    'Qwen/Qwen3-8B'                             = @{
-        gguf   = @{ repo='bartowski/Qwen_Qwen3-8B-GGUF';                     basename='Qwen3-8B';                    template='' }
-        ollama = 'qwen3:8b' }
-    'Qwen/Qwen3-14B'                            = @{
-        gguf   = @{ repo='bartowski/Qwen_Qwen3-14B-GGUF';                    basename='Qwen3-14B';                   template='' }
-        ollama = 'qwen3:14b' }
-    'Qwen/Qwen3-30B-A3B'                        = @{
-        gguf   = @{ repo='bartowski/Qwen_Qwen3-30B-A3B-GGUF';                basename='Qwen3-30B-A3B';               template='' }
-        ollama = 'qwen3:30b-a3b' }
-    'Qwen/Qwen3-32B'                            = @{
-        gguf   = @{ repo='bartowski/Qwen_Qwen3-32B-GGUF';                    basename='Qwen3-32B';                   template='' }
-        ollama = 'qwen3:32b' }
-    # Qwen2.5 Coder ──────────────────────────────────────────────────────────
-    'Qwen/Qwen2.5-Coder-1.5B-Instruct'         = @{
-        gguf   = @{ repo='bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF';       basename='Qwen2.5-Coder-1.5B-Instruct'; template='' }
-        ollama = 'qwen2.5-coder:1.5b' }
-    'Qwen/Qwen2.5-Coder-3B-Instruct'           = @{
-        gguf   = @{ repo='bartowski/Qwen2.5-Coder-3B-Instruct-GGUF';         basename='Qwen2.5-Coder-3B-Instruct';   template='' }
-        ollama = 'qwen2.5-coder:3b' }
-    'Qwen/Qwen2.5-Coder-7B-Instruct'           = @{
-        gguf   = @{ repo='bartowski/Qwen2.5-Coder-7B-Instruct-GGUF';         basename='Qwen2.5-Coder-7B-Instruct';   template='' }
-        ollama = 'qwen2.5-coder:7b' }
-    'Qwen/Qwen2.5-Coder-14B-Instruct'          = @{
-        gguf   = @{ repo='bartowski/Qwen2.5-Coder-14B-Instruct-GGUF';        basename='Qwen2.5-Coder-14B-Instruct';  template='' }
-        ollama = 'qwen2.5-coder:14b' }
-    'Qwen/Qwen2.5-Coder-32B-Instruct'          = @{
-        gguf   = @{ repo='bartowski/Qwen2.5-Coder-32B-Instruct-GGUF';        basename='Qwen2.5-Coder-32B-Instruct';  template='' }
-        ollama = 'qwen2.5-coder:32b' }
-    # QwQ ────────────────────────────────────────────────────────────────────
-    'Qwen/QwQ-32B'                              = @{
-        gguf   = @{ repo='bartowski/QwQ-32B-GGUF';                            basename='QwQ-32B';                     template='' }
-        ollama = 'qwq:32b' }
-    # Llama 3.x ──────────────────────────────────────────────────────────────
-    'meta-llama/Llama-3.2-1B-Instruct'         = @{
-        gguf   = @{ repo='bartowski/Llama-3.2-1B-Instruct-GGUF';             basename='Llama-3.2-1B-Instruct';       template='' }
-        ollama = 'llama3.2:1b' }
-    'meta-llama/Llama-3.2-3B-Instruct'         = @{
-        gguf   = @{ repo='bartowski/Llama-3.2-3B-Instruct-GGUF';             basename='Llama-3.2-3B-Instruct';       template='' }
-        ollama = 'llama3.2:3b' }
-    'meta-llama/Llama-3.1-8B-Instruct'         = @{
-        gguf   = @{ repo='bartowski/Meta-Llama-3.1-8B-Instruct-GGUF';        basename='Meta-Llama-3.1-8B-Instruct';  template='' }
-        ollama = 'llama3.1:8b' }
-    'meta-llama/Llama-3.1-70B-Instruct'        = @{
-        gguf   = @{ repo='bartowski/Meta-Llama-3.1-70B-Instruct-GGUF';       basename='Meta-Llama-3.1-70B-Instruct'; template='' }
-        ollama = 'llama3.1:70b' }
-    'meta-llama/Llama-3.3-70B-Instruct'        = @{
-        gguf   = @{ repo='bartowski/Llama-3.3-70B-Instruct-GGUF';            basename='Llama-3.3-70B-Instruct';      template='' }
-        ollama = 'llama3.3:70b' }
-    # Mistral / Devstral ─────────────────────────────────────────────────────
-    'mistralai/Mistral-7B-Instruct-v0.3'       = @{
-        gguf   = @{ repo='bartowski/Mistral-7B-Instruct-v0.3-GGUF';          basename='Mistral-7B-Instruct-v0.3';    template='' }
-        ollama = 'mistral:7b' }
-    'mistralai/Mistral-Nemo-Instruct-2407'     = @{
-        gguf   = @{ repo='bartowski/Mistral-Nemo-Instruct-2407-GGUF';        basename='Mistral-Nemo-Instruct-2407';  template='' }
-        ollama = 'mistral-nemo' }
-    'mistralai/Devstral-Small-2505'            = @{
-        gguf   = @{ repo='bartowski/Devstral-Small-2505-GGUF';               basename='Devstral-Small-2505';         template='' }
-        ollama = 'devstral:24b' }
-    # Microsoft Phi-4 ────────────────────────────────────────────────────────
-    'microsoft/Phi-4'                           = @{
-        gguf   = @{ repo='bartowski/Phi-4-GGUF';                             basename='Phi-4';                       template='' }
-        ollama = 'phi4' }
-    'microsoft/phi-4-mini-instruct'            = @{
-        gguf   = @{ repo='bartowski/phi-4-mini-instruct-GGUF';               basename='phi-4-mini-instruct';         template='' }
-        ollama = 'phi4-mini' }
-    # Google Gemma 3 ─────────────────────────────────────────────────────────
-    'google/gemma-3-1b-it'                     = @{
-        gguf   = @{ repo='bartowski/gemma-3-1b-it-GGUF';                     basename='gemma-3-1b-it';               template='' }
-        ollama = 'gemma3:1b' }
-    'google/gemma-3-4b-it'                     = @{
-        gguf   = @{ repo='bartowski/gemma-3-4b-it-GGUF';                     basename='gemma-3-4b-it';               template='' }
-        ollama = 'gemma3:4b' }
-    'google/gemma-3-9b-it'                     = @{
-        gguf   = @{ repo='bartowski/gemma-3-9b-it-GGUF';                     basename='gemma-3-9b-it';               template='' }
-        ollama = 'gemma3:9b' }
-    'google/gemma-3-12b-it'                    = @{
-        gguf   = @{ repo='bartowski/gemma-3-12b-it-GGUF';                    basename='gemma-3-12b-it';              template='' }
-        ollama = 'gemma3:12b' }
-    'google/gemma-3-27b-it'                    = @{
-        gguf   = @{ repo='bartowski/gemma-3-27b-it-GGUF';                    basename='gemma-3-27b-it';              template='' }
-        ollama = 'gemma3:27b' }
-    # Cohere ─────────────────────────────────────────────────────────────────
-    'CohereForAI/c4ai-command-r7b-12-2024'    = @{
-        gguf   = @{ repo='bartowski/c4ai-command-r7b-12-2024-GGUF';          basename='c4ai-command-r7b-12-2024';    template='' }
-        ollama = 'command-r7b' }
-    # DeepSeek R1 distills ───────────────────────────────────────────────────
-    # DeepSeek Coder V2 ─────────────────────────────────────────────────────────
-    'deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct' = @{
-        gguf   = @{ repo='bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF'; basename='DeepSeek-Coder-V2-Lite-Instruct'; template='' }
-        ollama = 'deepseek-coder-v2:16b' }
-    # DeepSeek R1 distills ───────────────────────────────────────────────────────
-    'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'  = @{
-        gguf   = @{ repo='bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF';     basename='DeepSeek-R1-Distill-Llama-8B';  template='deepseek-r1' }
-        ollama = 'deepseek-r1:8b' }
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B'   = @{
-        gguf   = @{ repo='bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF';      basename='DeepSeek-R1-Distill-Qwen-7B';   template='deepseek-r1' }
-        ollama = 'deepseek-r1:7b' }
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B'  = @{
-        gguf   = @{ repo='bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF';     basename='DeepSeek-R1-Distill-Qwen-14B';  template='deepseek-r1' }
-        ollama = 'deepseek-r1:14b' }
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B'  = @{
-        gguf   = @{ repo='bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF';     basename='DeepSeek-R1-Distill-Qwen-32B';  template='deepseek-r1' }
-        ollama = 'deepseek-r1:32b' }
-}
-
-$script:FormatSuffixPattern = '(-GGUF|-FP8|-FP16|-AWQ|-GPTQ|-EXL2|-EETQ|-marlin|-Q\d\S*)$'
-
-function Get-ModelDbEntry {
-    param([string]$HfId)
-    # 1. Exact match
-    if ($script:ModelDb.Contains($HfId)) { return $script:ModelDb[$HfId] }
-    # 2. Strip format suffix, exact match
-    $stripped = $HfId -replace $script:FormatSuffixPattern, ''
-    if ($script:ModelDb.Contains($stripped)) { return $script:ModelDb[$stripped] }
-    # 3. Strip provider prefix from stripped name, match any DB key by model name alone
-    $modelName = $stripped -replace '^[^/]+/', ''
-    $matchKey  = $script:ModelDb.Keys | Where-Object { ($_ -replace '^[^/]+/', '') -eq $modelName } | Select-Object -First 1
-    if ($matchKey) { return $script:ModelDb[$matchKey] }
-    # 4. If original repo ends in -GGUF, synthesize an entry for direct --hf-repo use
-    if ($HfId -match '-GGUF$') {
-        $basename = ($HfId -replace '^[^/]+/', '') -replace '-GGUF$', ''
-        $tmpl     = if ($HfId -match 'DeepSeek-R1') { 'deepseek-r1' } else { '' }
-        return @{ gguf = @{ repo = $HfId; basename = $basename; template = $tmpl } }
-    }
-    return $null
-}
-
-function Test-ToolCapable {
-    param([string]$HfId)
-    foreach ($f in $script:ToolCapableFamilies) {
-        if ($HfId -match [regex]::Escape($f)) { return $true }
-    }
-    return $false
-}
-
-function Get-PreferredRunner {
-    param([hashtable]$DbEntry)
-    if ($DbEntry.ContainsKey('gguf') -and $DbEntry['gguf']) { return 'llamacpp' }
-    if ($DbEntry.ContainsKey('ollama') -and $DbEntry['ollama']) { return 'ollama' }
-    return $null
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
 # GPU detection
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -462,7 +288,7 @@ function Get-CodingCandidates {
     Write-Step "Querying LlmFit: top $Limit coding models for this hardware"
 
     $errFile = [System.IO.Path]::GetTempFileName()
-    $raw = & llmfit recommend --json --use-case coding --limit $Limit 2>$errFile
+    $raw = & llmfit recommend --json --use-case coding --capability tool_use --runtime llamacpp --min-fit good --limit $Limit 2>$errFile
     $stderr = Get-Content $errFile -Raw; Remove-Item $errFile -Force
     if ($LASTEXITCODE -ne 0) { throw "LlmFit exited with code ${LASTEXITCODE}:`n$stderr" }
 
@@ -475,32 +301,40 @@ function Get-CodingCandidates {
     catch { throw "Could not parse LlmFit JSON output.`nRaw:`n$raw" }
     if (-not $models -or $models.Count -eq 0) { throw 'LlmFit returned an empty model list.' }
 
-    Write-Info "LlmFit returned $($models.Count) result(s); filtering for coding + tool-use"
+    Write-Info "LlmFit returned $($models.Count) result(s)"
 
+    $prefProviders = @('bartowski', 'unsloth', 'mradermacher')
     $candidates = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($m in $models) {
         $hfId    = $m.name
-        $canTool = Test-ToolCapable -HfId $hfId
-        $entry   = Get-ModelDbEntry -HfId $hfId
+        $sources = @($m.gguf_sources)
 
-        if (-not $canTool)  { Write-Info "  Skip (not tool-capable): $hfId"; continue }
-        if (-not $entry)    { Write-Info "  Skip (no GGUF source):   $hfId"; continue }
+        if (-not $sources -or $sources.Count -eq 0) {
+            Write-Info "  Skip (no GGUF source): $hfId"
+            continue
+        }
 
-        $runner = Get-PreferredRunner -DbEntry $entry
-        if (-not $runner)   { Write-Info "  Skip (no runner):        $hfId"; continue }
+        $source = $null
+        foreach ($prov in $prefProviders) {
+            $source = $sources | Where-Object { $_.provider -eq $prov } | Select-Object -First 1
+            if ($source) { break }
+        }
+        if (-not $source) { $source = $sources[0] }
 
-        $ggufInfo = if ($runner -eq 'llamacpp') { $entry['gguf'] } else { $null }
+        $repo     = $source.repo
+        $basename = ($repo -split '/')[-1] -replace '-GGUF$', ''
+
         $candidates.Add([PSCustomObject]@{
             Index        = $candidates.Count + 1
             HfId         = $hfId
-            Runner       = $runner
-            GgufRepo     = if ($ggufInfo) { $ggufInfo.repo }     else { '' }
-            GgufBasename = if ($ggufInfo) { $ggufInfo.basename } else { '' }
-            Template     = if ($ggufInfo) { $ggufInfo.template } else { '' }
-            OllamaTag    = if ($entry.ContainsKey('ollama')) { $entry['ollama'] } else { '' }
+            Runner       = 'llamacpp'
+            GgufRepo     = $repo
+            GgufBasename = $basename
+            Template     = ''
+            OllamaTag    = ''
             Quantization = if ($m.best_quant) { $m.best_quant } else { 'Q4_K_M' }
             Score        = $m.score
-            Params       = if ($m.params_b) { $m.params_b } else { $m.parameter_count }
+            Params       = $m.params_b
             Fit          = $m.fit_level
             MemPct       = $m.utilization_pct
         })
@@ -518,7 +352,7 @@ function Show-CandidateTable {
 
     $colWidths = @{ N=3; Model=38; Params=7; Score=7; VRAM=6; Runner=10 }
 
-    $header  = ' {0,-$($colWidths.N)} | {1,-$($colWidths.Model)} | {2,-$($colWidths.Params)} | {3,-$($colWidths.Score)} | {4,-$($colWidths.VRAM)} | {5,-$($colWidths.Runner)}' -f
+    $header  = " {0,-$($colWidths.N)} | {1,-$($colWidths.Model)} | {2,-$($colWidths.Params)} | {3,-$($colWidths.Score)} | {4,-$($colWidths.VRAM)} | {5,-$($colWidths.Runner)}" -f
                '#', 'Model', 'Params', 'Score', 'VRAM%', 'Runner'
     $divider = '-' * ($header.Length)
 
@@ -537,11 +371,12 @@ function Show-CandidateTable {
             $modelLabel = $modelLabel.Substring(0, $colWidths.Model - 1) + [char]0x2026
         }
         $runnerLabel = if ($c.Runner -eq 'llamacpp') { 'llama.cpp' } else { 'Ollama' }
-        $row = ' {0,-$($colWidths.N)} | {1,-$($colWidths.Model)} | {2,-$($colWidths.Params)} | {3,-$($colWidths.Score)} | {4,-$($colWidths.VRAM)} | {5,-$($colWidths.Runner)}' -f
+        $paramsStr = if ($null -ne $c.Params) { "$([math]::Round([double]$c.Params, 1))B" } else { '?' }
+        $row = " {0,-$($colWidths.N)} | {1,-$($colWidths.Model)} | {2,-$($colWidths.Params)} | {3,-$($colWidths.Score)} | {4,-$($colWidths.VRAM)} | {5,-$($colWidths.Runner)}" -f
                $c.Index,
                $modelLabel,
-               "$($c.Params)B",
-               ([math]::Round($c.Score, 1)),
+               $paramsStr,
+               ([math]::Round([double]$c.Score, 1)),
                "$($c.MemPct)%",
                $runnerLabel
         $color = if ($c.Index -eq 1) { 'Yellow' } else { 'Gray' }
@@ -559,7 +394,7 @@ function Select-Model {
     )
 
     if ($Candidates.Count -eq 0) {
-        throw 'No usable candidates found. Try increasing -TopN or adding entries to the model DB.'
+        throw 'No usable candidates found. Try increasing -TopN (e.g. -TopN 30).'
     }
 
     Show-CandidateTable -Candidates $Candidates

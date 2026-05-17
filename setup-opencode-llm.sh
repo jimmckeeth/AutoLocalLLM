@@ -11,13 +11,13 @@
 #   ./setup-opencode-llm.sh [OPTIONS]
 #
 # Options:
-#   --manual            Show ranked candidate list; pick a model interactively
-#   --top-n N           Candidates to request from LlmFit   (default: 10)
-#   --context N         Context window size in tokens        (default: 16384)
-#   --port N            llama-server port                    (default: 8080)
-#   --hf-token TOKEN    HuggingFace token for gated models
-#   --force             Re-download and overwrite config
-#   --help              Show this message
+#   --manual  | -manual | -m          Show ranked candidate list; pick a model interactively
+#   --top-n N | -top-n N | -n N       Candidates to request from LlmFit   (default: 20)
+#   --context N | -context N | -c N   Context window size in tokens        (default: 16384)
+#   --port N  | -port N  | -p N       llama-server port                    (default: 8080)
+#   --hf-token TOKEN | -hf-token TOKEN  HuggingFace token for gated models
+#   --force   | -force  | -f          Re-download and overwrite config
+#   --help    | -h                    Show this message
 
 set -euo pipefail
 
@@ -25,7 +25,7 @@ set -euo pipefail
 # Defaults
 # ─────────────────────────────────────────────────────────────────────────────
 
-TOP_N=10
+TOP_N=20
 CONTEXT_SIZE=16384
 PORT=8080
 HF_TOKEN=""
@@ -43,14 +43,14 @@ usage() { grep '^#' "$0" | head -25 | sed 's/^# \{0,1\}//'; exit 0; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --manual)     MANUAL=true;          shift   ;;
-        --force)      FORCE=true;           shift   ;;
-        --help|-h)    usage                         ;;
-        --top-n)      TOP_N="$2";           shift 2 ;;
-        --context)    CONTEXT_SIZE="$2";    shift 2 ;;
-        --port)       PORT="$2";            shift 2 ;;
-        --hf-token)   HF_TOKEN="$2";        shift 2 ;;
-        *)            echo "Unknown option: $1"; usage ;;
+        --manual|-manual|-m)        MANUAL=true;          shift   ;;
+        --force|-force|-f)          FORCE=true;            shift   ;;
+        --help|-help|-h)            usage                          ;;
+        --top-n|-top-n|-n)          TOP_N="$2";            shift 2 ;;
+        --context|-context|-c)      CONTEXT_SIZE="$2";     shift 2 ;;
+        --port|-port|-p)            PORT="$2";             shift 2 ;;
+        --hf-token|-hf-token)       HF_TOKEN="$2";         shift 2 ;;
+        *)                          echo "Unknown option: $1"; usage ;;
     esac
 done
 
@@ -202,16 +202,30 @@ MODEL_DB = {
 def is_tool_capable(hf_id):
     return any(f in hf_id for f in TOOL_FAMILIES)
 
+NON_GGUF_FORMATS = ['GPTQ', 'AWQ', 'EXL2', 'EETQ', 'marlin']
+
 def get_entry(hf_id):
     if hf_id in MODEL_DB:
         return MODEL_DB[hf_id]
     stripped = re.sub(r'(-GGUF|-Q\d.*)$', '', hf_id)
-    return MODEL_DB.get(stripped)
+    if stripped in MODEL_DB:
+        return MODEL_DB[stripped]
+    # For community repos that end in -GGUF, synthesize an entry so the HF repo
+    # path can be passed directly to llama-server --hf-repo.
+    if '-GGUF' in hf_id:
+        basename = re.sub(r'^[^/]+/', '', hf_id)      # strip provider prefix
+        basename = re.sub(r'-GGUF$', '', basename)     # strip -GGUF suffix
+        template = 'deepseek-r1' if 'DeepSeek-R1' in hf_id else ''
+        return {'gguf': {'repo': hf_id, 'basename': basename, 'template': template}}
+    return None
 
 def build_candidates(models):
     candidates = []
     for m in models:
         hf_id = m.get('name', '')
+        if any(fmt in hf_id for fmt in NON_GGUF_FORMATS):
+            print(f'  Skip (unsupported format): {hf_id}', file=sys.stderr)
+            continue
         entry = get_entry(hf_id)
         if not entry:
             print(f'  Skip (no DB entry): {hf_id}', file=sys.stderr)
@@ -232,7 +246,7 @@ def build_candidates(models):
             'gguf_basename': gguf.get('basename', ''),
             'template':      gguf.get('template', ''),
             'ollama_tag':    entry.get('ollama', ''),
-            'quantization':  m.get('quantization') or 'Q4_K_M',
+            'quantization':  m.get('quantization') or m.get('best_quant') or 'Q4_K_M',
             'score':         round(float(m.get('score') or 0), 1),
             'params':        m.get('params', '?'),
             'mem_pct':       m.get('memory_percent', '?'),

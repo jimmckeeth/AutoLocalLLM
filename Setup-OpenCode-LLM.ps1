@@ -371,7 +371,11 @@ function Show-CandidateTable {
             $modelLabel = $modelLabel.Substring(0, $colWidths.Model - 1) + [char]0x2026
         }
         $runnerLabel = if ($c.Runner -eq 'llamacpp') { 'llama.cpp' } else { 'Ollama' }
-        $paramsStr = if ($null -ne $c.Params) { "$([math]::Round([double]$c.Params, 1))B" } else { '?' }
+        $paramsStr = if ($null -ne $c.Params) {
+            $pNum = 0.0
+            $pStr = [string]$c.Params -replace 'B$',''
+            if ([double]::TryParse($pStr, [ref]$pNum)) { "$([math]::Round($pNum, 1))B" } else { [string]$c.Params }
+        } else { '?' }
         $row = " {0,-$($colWidths.N)} | {1,-$($colWidths.Model)} | {2,-$($colWidths.Params)} | {3,-$($colWidths.Score)} | {4,-$($colWidths.VRAM)} | {5,-$($colWidths.Runner)}" -f
                $c.Index,
                $modelLabel,
@@ -451,7 +455,14 @@ function Start-LlamaServer {
     } catch {}
 
     Write-Step "Starting llama-server  ($($Model.GgufRepo) / $hfFile)"
-    Write-Info 'The GGUF will be downloaded from HuggingFace if not cached (may take a few minutes).'
+    $hfCachePath = Join-Path $env:USERPROFILE '.cache\huggingface\hub'
+    $cachedFile  = Get-ChildItem -Path $hfCachePath -Filter $hfFile -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cachedFile) {
+        Write-Info "Model cached at: $($cachedFile.FullName)"
+        Write-Info 'llama-server will load from cache (no download needed).'
+    } else {
+        Write-Info 'Model not yet cached — llama-server will download from HuggingFace (may take several minutes).'
+    }
 
     $serverArgs = Build-LlamaServerArgs -Model $Model -Token $Token -Ctx $Ctx -SrvPort $SrvPort
     Write-Info "  llama-server $($serverArgs -join ' ')"

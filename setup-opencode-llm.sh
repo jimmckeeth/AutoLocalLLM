@@ -206,7 +206,10 @@ def cmd_table():
             label = label[:W - 1] + '…'
         color = '\033[33m' if c['index'] == 1 else '\033[90m'
         reset = '\033[0m'
-        params = f"{round(float(c['params']), 1)}B" if c['params'] is not None else '?'
+        try:
+            params = f"{round(float(str(c['params']).rstrip('B').strip()), 1)}B" if c['params'] is not None else '?'
+        except (ValueError, TypeError):
+            params = str(c['params'])
         mem    = f"{c['mem_pct']}%" if c['mem_pct'] is not None else '?'
         print(f'  {color}{c["index"]:<3} | {label:<{W}} | {params:<7} | {c["score"]:<5} | {mem:<5} | {runner:<9}{reset}')
     print(f'  {div}\n')
@@ -527,13 +530,19 @@ install_ollama() {
 get_candidates() {
     step "Querying LlmFit: top ${TOP_N} coding models for this hardware"
 
-    local raw
-    raw=$(llmfit recommend --json --use-case coding --capability tool_use --runtime llamacpp --min-fit good --limit "$TOP_N" 2>&1) \
-        || die "LlmFit failed (exit $?). Output: ${raw}"
+    local llmfit_err
+    llmfit_err=$(mktemp /tmp/autolocalllm_llmfit_err_XXXXXX)
+    TMP_FILES+=("$llmfit_err")
 
-    CANDIDATES_JSON=$(echo "$raw" | py filter)
+    local raw
+    raw=$(llmfit recommend --json --use-case coding --capability tool_use --runtime llamacpp --min-fit good --limit "$TOP_N" 2>"$llmfit_err") \
+        || die "LlmFit failed (exit $?). Stderr: $(cat "$llmfit_err")"
+
+    CANDIDATES_JSON=$(echo "$raw" | py filter) \
+        || die "Failed to parse LlmFit output. Raw JSON length: ${#raw}"
     local count
-    count=$(echo "$CANDIDATES_JSON" | py len)
+    count=$(echo "$CANDIDATES_JSON" | py len) \
+        || die "Failed to count candidates."
 
     info "Found ${count} candidate(s)"
     [[ "$count" -eq 0 ]] && die "No candidates found. Try --top-n 30 or check that llmfit supports your hardware."
@@ -546,11 +555,13 @@ get_candidates() {
 SELECTED_JSON=""
 
 select_model() {
-    echo "$CANDIDATES_JSON" | py table
+    echo "$CANDIDATES_JSON" | py table \
+        || die "Failed to display candidate table (Python error above)."
 
     if [[ "$MANUAL" == false ]]; then
         info "Auto-selecting #1  (use --manual to pick)"
-        SELECTED_JSON=$(echo "$CANDIDATES_JSON" | py get 1)
+        SELECTED_JSON=$(echo "$CANDIDATES_JSON" | py get 1) \
+            || die "Failed to select candidate #1."
         return
     fi
 
@@ -593,8 +604,12 @@ start_llama_server() {
     fi
 
     step "Starting llama-server  (${hf_repo} / ${hf_file})"
-    info "llama-server will download the GGUF from HuggingFace if not cached."
-    warn "First run may take several minutes while the model downloads..."
+    local hf_cache="${HOME}/.cache/huggingface/hub"
+    if find "$hf_cache" -name "$hf_file" 2>/dev/null | grep -q .; then
+        info "Model found in HuggingFace cache — loading from disk (no download needed)."
+    else
+        warn "Model not yet cached — llama-server will download from HuggingFace (may take several minutes)."
+    fi
 
     local -a server_args=(
         --hf-repo "$hf_repo"

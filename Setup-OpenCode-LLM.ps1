@@ -20,7 +20,7 @@
         OpenCode – Terminal AI coding agent   (https://opencode.ai)
 
 .PARAMETER TopN
-    How many top coding models to query from LlmFit.  Default: 10.
+    How many top coding models to query from LlmFit.  Default: 20.
 
 .PARAMETER ContextSize
     Context window (-c) passed to llama-server, or num_ctx for Ollama.  Default: 16384.
@@ -46,7 +46,7 @@
 [CmdletBinding()]
 param (
     [ValidateRange(1, 50)]
-    [int]$TopN = 10,
+    [int]$TopN = 20,
 
     [ValidateSet(4096, 8192, 16384, 32768, 65536)]
     [int]$ContextSize = 16384,
@@ -58,8 +58,26 @@ param (
 
     [switch]$Manual,
 
-    [switch]$Force
+    [switch]$Force,
+
+    [Parameter(ValueFromRemainingArguments=$true)]
+    [string[]]$ExtraArgs = @()
 )
+
+# Accept GNU-style --double-dash args so bash muscle-memory works in PowerShell
+$i = 0
+while ($i -lt $ExtraArgs.Count) {
+    switch ($ExtraArgs[$i].ToLower()) {
+        '--manual'   { $Manual      = [switch]$true              }
+        '--force'    { $Force       = [switch]$true              }
+        '--top-n'    { $TopN        = [int]$ExtraArgs[++$i]      }
+        '--context'  { $ContextSize = [int]$ExtraArgs[++$i]      }
+        '--port'     { $Port        = [int]$ExtraArgs[++$i]      }
+        '--hf-token' { $HfToken     = $ExtraArgs[++$i]           }
+        default      { Write-Warning "Unknown argument: $($ExtraArgs[$i])" }
+    }
+    $i++
+}
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -223,6 +241,13 @@ function Get-ModelDbEntry {
     if ($script:ModelDb.Contains($HfId)) { return $script:ModelDb[$HfId] }
     $stripped = $HfId -replace '-GGUF$', '' -replace '-Q\d.*$', ''
     if ($script:ModelDb.Contains($stripped)) { return $script:ModelDb[$stripped] }
+    # For any community repo that ends in -GGUF, synthesize an entry so we can
+    # pass the HF repo path directly to llama-server --hf-repo.
+    if ($HfId -match '-GGUF') {
+        $basename = ($HfId -replace '^[^/]+/', '') -replace '-GGUF$', ''
+        $tmpl     = if ($HfId -match 'DeepSeek-R1') { 'deepseek-r1' } else { '' }
+        return @{ gguf = @{ repo = $HfId; basename = $basename; template = $tmpl } }
+    }
     return $null
 }
 
@@ -424,8 +449,10 @@ function Get-CodingCandidates {
     param([int]$Limit)
     Write-Step "Querying LlmFit: top $Limit coding models for this hardware"
 
-    $raw = & llmfit recommend --json --use-case coding --limit $Limit 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "LlmFit exited with code $LASTEXITCODE:`n$raw" }
+    $errFile = [System.IO.Path]::GetTempFileName()
+    $raw = & llmfit recommend --json --use-case coding --limit $Limit 2>$errFile
+    $stderr = Get-Content $errFile -Raw; Remove-Item $errFile -Force
+    if ($LASTEXITCODE -ne 0) { throw "LlmFit exited with code ${LASTEXITCODE}:`n$stderr" }
 
     $jsonText = ($raw -join "`n")
     if ($jsonText -match '(?s)(\[.*?\])') { $jsonText = $Matches[1] }
@@ -436,11 +463,16 @@ function Get-CodingCandidates {
 
     Write-Info "LlmFit returned $($models.Count) result(s); filtering for coding + tool-use"
 
+    $script:NonGgufPatterns = @('GPTQ', 'AWQ', 'EXL2', 'EETQ', 'marlin')
+
     $candidates = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($m in $models) {
         $hfId    = $m.name
-        $entry   = Get-ModelDbEntry -HfId $hfId
+        if ($script:NonGgufPatterns | Where-Object { $hfId -match $_ }) {
+            Write-Info "  Skip (unsupported format): $hfId"; continue
+        }
         $canTool = Test-ToolCapable -HfId $hfId
+        $entry   = Get-ModelDbEntry -HfId $hfId
 
         if (-not $canTool)  { Write-Info "  Skip (not tool-capable): $hfId"; continue }
         if (-not $entry)    { Write-Info "  Skip (no DB entry):      $hfId"; continue }
@@ -457,7 +489,7 @@ function Get-CodingCandidates {
             GgufBasename = if ($ggufInfo) { $ggufInfo.basename } else { '' }
             Template     = if ($ggufInfo) { $ggufInfo.template } else { '' }
             OllamaTag    = if ($entry.ContainsKey('ollama')) { $entry['ollama'] } else { '' }
-            Quantization = if ($m.quantization) { $m.quantization } else { 'Q4_K_M' }
+            Quantization = if ($m.quantization) { $m.quantization } elseif ($m.best_quant) { $m.best_quant } else { 'Q4_K_M' }
             Score        = $m.score
             Params       = $m.params
             Fit          = $m.fit

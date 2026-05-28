@@ -4,7 +4,7 @@
 
 AutoLocalLLM chains three open-source tools to give you a fully offline, private AI coding agent in a single step:
 
-1. **[LlmFit](https://github.com/AlexsJones/llmfit)** — scans your RAM, VRAM, and CPU to rank which LLMs will run well on your hardware, filtered for _coding_ and _tool-use_ capability.
+1. **[LlmFit](https://github.com/AlexsJones/llmfit)** — scans your RAM, VRAM, GPU, and CPU to rank which LLMs will run well on your hardware, filtered for _coding_ and _tool-use_ capability.
 2. **[llama.cpp](https://github.com/ggml-org/llama.cpp)** _(primary)_ / **[Ollama](https://ollama.com)** _(fallback)_ — downloads the GGUF and serves an OpenAI-compatible local API.
 3. **[OpenCode](https://opencode.ai)** — a terminal AI coding agent that connects to that local API.
 
@@ -19,6 +19,7 @@ All missing dependencies are installed automatically.
 
 ## Contents
 
+- [Overview](#overview)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [Parameters](#parameters)
@@ -33,19 +34,35 @@ All missing dependencies are installed automatically.
 
 ---
 
+## Overview
+
+Most people just browse model lists on [Ollama](https://ollama.com/library), [OpenRouter](https://openrouter.ai/rankings), [Huggingface](https://huggingface.co/models), or some list recommending the _best coding models_. They download Ollama and a model, and then are disapointed in the performance. The missing parts are [GGUF Quantization](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md), [Llama.cpp](https://github.com/ggml-org/llama.cpp), and [LlmFit](https://www.llmfit.org/).  
+
+* [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) (GPT-Generated Unified Format) is the standard binary file format for storing and running quantized large language models on consumer hardware, replacing the legacy GGML format. It enables significant model compression—often 4–8x reduction in size—while maintaining high inference quality and speed through various quantization techniques. Quantization is the process of reducing the percesion of the vector values from their 16-bit default.
+  * **K-Quants** (Modern Standard): These use double quantization and mixed precision to balance quality and size.
+    * **`Q4_K_M`**: 4-bit quantization - the most popular default, offering the best balance of speed, memory, and quality for most users.
+    * **`Q5_K_M`** / **`Q6_K`**: `5` or `6-bit` quantization provides higher quality options for users with more RAM, with `Q6_K` being nearly lossless.
+    * **`Q2_K`**: `2-bit` quantization provides _extreme compression_, generally not recommended due to significant quality loss.
+* [Llama.cpp](https://github.com/ggml-org/llama.cpp) is a lighter weight LLM inference platform written in C/C++ and focused on GGUF quantization support. Olama uses Llama.cpp for GGUF support, introducing signficant overhead and wasting RAM. Switching to Llama.cpp saves resouces and improves performance.
+* [LlmFit](https://github.com/AlexsJones/llmfit) compares your system RAM, CPU & GPU against 1500 models across hundreds of providers. Finding the right-sized model for your system.
+  * When selecting a model for coding, you want to filter by the _Usecase_ for **Coding** (obviously), and the _Capability_ of **Tool Use**, which allows your agent to interact with skills, MCP, and other system tools. Anything else is gravy.
+* [OpenCode](https://opencode.ai/) is an opensource CLI coding agent, similar to Claude, Codex, etc. It provides all the useful tools and features necessary for coding. Many other AI agents support 3rd party models, so you can use a different agent if you like.
+
 ## Requirements
 
-|              | Minimum                                     | Notes                                                            |
-| ------------ | ------------------------------------------- | ---------------------------------------------------------------- |
-| **OS**       | Windows 10/11 or Debian/Ubuntu/Fedora/NixOS |                                                                  |
-| **RAM**      | 8 GB                                        | 16 GB+ recommended for 7–8B models                               |
-| **Disk**     | 5–50 GB                                     | Depends on model size and quantization                           |
-| **GPU**      | Optional                                    | NVIDIA CUDA · AMD ROCm/Vulkan · Intel Vulkan · CPU-only all work |
-| **Internet** | Required on first run                       | Model is cached locally after the initial download               |
+|              | Minimum                  | Notes                                                            |
+| ------------ | ------------------------ | ---------------------------------------------------------------- |
+| **OS**       | Windows 10 or Linux      | Specifically supports Debian/Ubuntu/Fedora/NixOS but YMMV        |
+| **RAM**      | 8 GB                     | 16 GB+ recommended for 7–8B models                               |
+| **Disk**     | 5–50 GB                  | Depends on model size and quantization                           |
+| **GPU**      | Optional                 | NVIDIA CUDA · AMD ROCm/Vulkan · Intel Vulkan · CPU-only all work |
+| **Internet** | Required on first run    | Model is cached locally after the initial download               |
 
 ---
 
 ## Quick Start
+
+If the script doesn't work for you, or you want more control, simply use the tools manually.
 
 ### Windows
 
@@ -125,14 +142,14 @@ Both scripts accept the same logical options:
 Pass `-Manual` (Windows) or `--manual` (Linux) to see all filtered candidates before anything downloads:
 
 ```
-  ──────────────────────────────────────────────────────────────────────
+  ────────────────────────────────────────────────────────────────────────────────
   #   | Model                                | Params  | Score | VRAM% | Runner
-  ──────────────────────────────────────────────────────────────────────
+  ────────────────────────────────────────────────────────────────────────────────
   1   | Qwen3-8B (Q4_K_M)                    | 8B      | 92.3  | 68%   | llama.cpp
   2   | Qwen2.5-Coder-7B-Instruct (Q4_K_M)   | 7B      | 89.1  | 62%   | llama.cpp
   3   | Llama-3.1-8B-Instruct (Q4_K_M)       | 8B      | 87.4  | 65%   | llama.cpp
-  4   | deepseek-r1:8b                        | 8B      | 84.2  | 64%   | Ollama
-  ──────────────────────────────────────────────────────────────────────
+  4   | deepseek-r1:8b                       | 8B      | 84.2  | 64%   | Ollama
+  ────────────────────────────────────────────────────────────────────────────────
 
   Enter number [1-4] or press Enter for #1:
 ```

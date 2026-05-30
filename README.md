@@ -35,13 +35,13 @@ All missing dependencies are installed automatically.
 
 ## Requirements
 
-|              | Minimum                                     | Notes                                                            |
-| ------------ | ------------------------------------------- | ---------------------------------------------------------------- |
-| **OS**       | Windows 10/11 or Debian/Ubuntu/Fedora/NixOS |                                                                  |
-| **RAM**      | 8 GB                                        | 16 GB+ recommended for 7–8B models                               |
-| **Disk**     | 5–50 GB                                     | Depends on model size and quantization                           |
-| **GPU**      | Optional                                    | NVIDIA CUDA · AMD ROCm/Vulkan · Intel Vulkan · CPU-only all work |
-| **Internet** | Required on first run                       | Model is cached locally after the initial download               |
+|              | Minimum                | Notes                                                        |
+| ------------ | ---------------------- | ------------------------------------------------------------ |
+| **OS**       | Windows 10/11 or Linux | Should work with Debian/Ubuntu/Fedora/NixOS/Arch/Steam OS    |
+| **RAM**      | 8 GB                   | 16 GB+ recommended for 7–8B models                           |
+| **Disk**     | 5–50 GB                | Depends on model size and quantization                       |
+| **GPU**      | Optional               | NVIDIA CUDA · AMD ROCm/Vulkan · Intel Vulkan · CPU-only all work |
+| **Internet** | Required on first run  | Model is cached locally after the initial download           |
 
 ---
 
@@ -88,7 +88,7 @@ Both scripts accept the same logical options:
 | PowerShell       | Bash                   | Default  | Description                                               |
 | ---------------- | ---------------------- | -------- | --------------------------------------------------------- |
 | `-Manual`        | `--manual` / `-m`      | off      | Show ranked candidate table; pick a model interactively   |
-| `-TopN N`        | `--top-n N` / `-n N`   | `20`     | Number of LlmFit candidates to fetch before filtering     |
+| `-TopN N`        | `--top-n N` / `-n N`   | `200`    | Number of LlmFit candidates to fetch before filtering     |
 | `-ContextSize N` | `--context N` / `-c N` | `16384`  | Context window (tokens) passed to the model server        |
 | `-Port N`        | `--port N` / `-p N`    | `8080`   | llama-server port (unused when Ollama is the runner)      |
 | `-HfToken TOKEN` | `--hf-token TOKEN`     | _(none)_ | HuggingFace access token for gated models                 |

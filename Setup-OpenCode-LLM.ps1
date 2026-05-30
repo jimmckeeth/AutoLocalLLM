@@ -4,49 +4,46 @@
     Finds, downloads, and configures the best local LLM for coding with tool-use support.
 
 .DESCRIPTION
-    Uses LlmFit to select the top coding + tool-use capable LLM that fits your hardware.
-
-    Without -Manual the top-ranked candidate is downloaded automatically.
-    With -Manual a ranked table is displayed and you choose which model to use.
-
-    Primary runtime is llama.cpp (llama-server with --hf-repo for HuggingFace download).
-    If a model has no GGUF mapping, Ollama is used as a fallback runner.
+    Installs prerequisites (llama.cpp, llmfit, OpenCode, Python) then delegates to
+    llm-setup-helper.py for model selection, download, server launch, and config writing.
 
     Dependencies installed automatically if absent:
         Scoop    – Windows package manager    (https://scoop.sh)
+        Python   – Orchestrator runtime       (https://python.org)
         llama.cpp – Local model runtime       (https://github.com/ggml-org/llama.cpp)
-        Ollama   – Fallback runtime           (https://ollama.com)  [only if needed]
         LlmFit   – Hardware-aware selector    (https://github.com/AlexsJones/llmfit)
         OpenCode – Terminal AI coding agent   (https://opencode.ai)
 
 .PARAMETER TopN
-    How many top coding models to query from LlmFit.  Default: 20.
+    Cap the number of candidates returned from LlmFit.  Default: unlimited.
 
 .PARAMETER ContextSize
-    Context window (-c) passed to llama-server, or num_ctx for Ollama.  Default: 16384.
+    Context window (-c) passed to llama-server.  Default: 16384.
 
 .PARAMETER Port
-    Port llama-server listens on (ignored when using Ollama runner).  Default: 8080.
+    Port llama-server listens on.  Default: 8080.
 
 .PARAMETER HfToken
-    HuggingFace token for gated models (e.g. Meta Llama).
+    HuggingFace token for gated models.
 
 .PARAMETER Manual
-    Display the ranked candidate list and prompt you to pick a model before downloading.
+    Display the ranked candidate list and prompt you to pick a model.
 
 .PARAMETER Force
-    Re-launch the server and overwrite the OpenCode config entry even if already set.
+    Re-download model even if already cached.
+
+.PARAMETER Update
+    Refresh the LlmFit model database before querying.
 
 .EXAMPLE
     .\Setup-OpenCode-LLM.ps1                        # fully automatic
     .\Setup-OpenCode-LLM.ps1 -Manual                # choose from ranked list
-    .\Setup-OpenCode-LLM.ps1 -Manual -TopN 20       # wider candidate list
+    .\Setup-OpenCode-LLM.ps1 -Update -Manual        # refresh DB, then choose
     .\Setup-OpenCode-LLM.ps1 -HfToken hf_xxx        # gated models
 #>
 [CmdletBinding()]
 param (
-    [ValidateRange(1, 50)]
-    [int]$TopN = 20,
+    [int]$TopN = 0,
 
     [ValidateSet(4096, 8192, 16384, 32768, 65536)]
     [int]$ContextSize = 16384,
@@ -57,8 +54,8 @@ param (
     [string]$HfToken = '',
 
     [switch]$Manual,
-
     [switch]$Force,
+    [switch]$Update,
 
     [Parameter(ValueFromRemainingArguments=$true)]
     [string[]]$ExtraArgs = @()
@@ -68,12 +65,13 @@ param (
 $i = 0
 while ($i -lt $ExtraArgs.Count) {
     switch ($ExtraArgs[$i].ToLower()) {
-        '--manual'   { $Manual      = [switch]$true              }
-        '--force'    { $Force       = [switch]$true              }
-        '--top-n'    { $TopN        = [int]$ExtraArgs[++$i]      }
-        '--context'  { $ContextSize = [int]$ExtraArgs[++$i]      }
-        '--port'     { $Port        = [int]$ExtraArgs[++$i]      }
-        '--hf-token' { $HfToken     = $ExtraArgs[++$i]           }
+        '--manual'   { $Manual      = [switch]$true         }
+        '--force'    { $Force       = [switch]$true         }
+        '--update'   { $Update      = [switch]$true         }
+        '--top-n'    { $TopN        = [int]$ExtraArgs[++$i] }
+        '--context'  { $ContextSize = [int]$ExtraArgs[++$i] }
+        '--port'     { $Port        = [int]$ExtraArgs[++$i] }
+        '--hf-token' { $HfToken     = $ExtraArgs[++$i]      }
         default      { Write-Warning "Unknown argument: $($ExtraArgs[$i])" }
     }
     $i++
@@ -86,8 +84,11 @@ $ErrorActionPreference = 'Stop'
 # Paths
 # ─────────────────────────────────────────────────────────────────────────────
 
-$script:LlamaCppDir = Join-Path $env:LOCALAPPDATA 'llama.cpp'
-$script:LlamaBinDir = Join-Path $script:LlamaCppDir 'bin'
+$script:LlamaCppDir  = Join-Path $env:LOCALAPPDATA 'llama.cpp'
+$script:LlamaBinDir  = Join-Path $script:LlamaCppDir 'bin'
+$script:ShareDir     = Join-Path $script:LlamaCppDir 'autolocalllm'
+$script:ScriptDir    = $PSScriptRoot
+$script:PythonHelper = Join-Path $script:ScriptDir 'llm-setup-helper.py'
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Output helpers
@@ -138,6 +139,34 @@ function Install-Scoop {
     Write-Ok 'Scoop installed'
 }
 
+function Install-Python {
+    if (Test-CommandExists 'python') {
+        $v = & python --version 2>&1
+        Write-Ok "Python already installed: $v"; return
+    }
+    Write-Step 'Installing Python'
+    if (Test-CommandExists 'scoop') {
+        scoop install python
+    } else {
+        $tmpInstaller = Join-Path $env:TEMP 'python-installer.exe'
+        Write-Info 'Downloading Python installer'
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe' `
+                          -OutFile $tmpInstaller
+        $ProgressPreference = 'Continue'
+        Start-Process -FilePath $tmpInstaller `
+                      -ArgumentList '/quiet', 'InstallAllUsers=0', 'PrependPath=1' `
+                      -Wait
+        Remove-Item $tmpInstaller -ErrorAction SilentlyContinue
+        $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'User') + ';' +
+                    [System.Environment]::GetEnvironmentVariable('PATH', 'Machine')
+    }
+    if (-not (Test-CommandExists 'python')) {
+        throw 'Python installation failed. Install from https://python.org then re-run.'
+    }
+    Write-Ok "Python installed: $(& python --version 2>&1)"
+}
+
 function Install-LlamaCpp {
     if (Test-CommandExists 'llama-server') { Write-Ok 'llama-server already on PATH'; return }
     $localExe = Join-Path $script:LlamaBinDir 'llama-server.exe'
@@ -185,41 +214,6 @@ function Install-LlamaCpp {
         throw 'llama-server not found. See https://github.com/ggml-org/llama.cpp/releases'
     }
     Write-Ok 'llama.cpp installed'
-}
-
-function Install-Ollama {
-    if (Test-CommandExists 'ollama') { Write-Ok 'Ollama already installed'; return }
-    Write-Step 'Installing Ollama (fallback runner)'
-    if (Test-CommandExists 'scoop') {
-        scoop install ollama
-    } else {
-        $tmpInstaller = Join-Path $env:TEMP 'OllamaSetup.exe'
-        Write-Info 'Downloading Ollama installer'
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile $tmpInstaller
-        $ProgressPreference = 'Continue'
-        Start-Process -FilePath $tmpInstaller -ArgumentList '/S' -Wait
-        Remove-Item $tmpInstaller -ErrorAction SilentlyContinue
-        $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'User') + ';' +
-                    [System.Environment]::GetEnvironmentVariable('PATH', 'Machine')
-    }
-    if (-not (Test-CommandExists 'ollama')) {
-        throw 'Ollama installation failed. Install manually from https://ollama.com/download'
-    }
-    Write-Ok 'Ollama installed'
-}
-
-function Start-OllamaDaemon {
-    $apiUrl = 'http://localhost:11434/api/tags'
-    try { $null = Invoke-RestMethod -Uri $apiUrl -TimeoutSec 3; Write-Ok 'Ollama daemon running'; return }
-    catch {}
-    Write-Info 'Starting Ollama daemon...'
-    Start-Process -FilePath 'ollama' -ArgumentList 'serve' -WindowStyle Hidden
-    for ($i = 0; $i -lt 20; $i++) {
-        Start-Sleep -Seconds 1
-        try { $null = Invoke-RestMethod -Uri $apiUrl -TimeoutSec 2; Write-Ok 'Ollama daemon started'; return } catch {}
-    }
-    throw 'Ollama did not start within 20 s. Run `ollama serve` manually and retry.'
 }
 
 function Install-LlmFit {
@@ -280,441 +274,39 @@ function Install-OpenCode {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LlmFit: query and build candidate list
-# ─────────────────────────────────────────────────────────────────────────────
-
-function Get-CodingCandidates {
-    param([int]$Limit)
-    Write-Step "Querying LlmFit: top $Limit coding models for this hardware"
-
-    $errFile = [System.IO.Path]::GetTempFileName()
-    $raw = & llmfit recommend --json --use-case coding --capability tool_use --runtime llamacpp --min-fit good --limit $Limit 2>$errFile
-    $stderr = Get-Content $errFile -Raw; Remove-Item $errFile -Force
-    if ($LASTEXITCODE -ne 0) { throw "LlmFit exited with code ${LASTEXITCODE}:`n$stderr" }
-
-    $jsonText = ($raw -join "`n")
-
-    try {
-        $parsed = $jsonText | ConvertFrom-Json
-        $models = if ($parsed.PSObject.Properties['models']) { $parsed.models } else { $parsed }
-    }
-    catch { throw "Could not parse LlmFit JSON output.`nRaw:`n$raw" }
-    if (-not $models -or $models.Count -eq 0) { throw 'LlmFit returned an empty model list.' }
-
-    Write-Info "LlmFit returned $($models.Count) result(s)"
-
-    $prefProviders = @('bartowski', 'unsloth', 'mradermacher')
-    $candidates = [System.Collections.Generic.List[PSCustomObject]]::new()
-    foreach ($m in $models) {
-        $hfId    = $m.name
-        $sources = @($m.gguf_sources)
-
-        if (-not $sources -or $sources.Count -eq 0) {
-            Write-Info "  Skip (no GGUF source): $hfId"
-            continue
-        }
-
-        $source = $null
-        foreach ($prov in $prefProviders) {
-            $source = $sources | Where-Object { $_.provider -eq $prov } | Select-Object -First 1
-            if ($source) { break }
-        }
-        if (-not $source) { $source = $sources[0] }
-
-        $repo     = $source.repo
-        $basename = ($repo -split '/')[-1] -replace '-GGUF$', ''
-
-        $candidates.Add([PSCustomObject]@{
-            Index        = $candidates.Count + 1
-            HfId         = $hfId
-            Runner       = 'llamacpp'
-            GgufRepo     = $repo
-            GgufBasename = $basename
-            Template     = ''
-            OllamaTag    = ''
-            Quantization = if ($m.best_quant) { $m.best_quant } else { 'Q4_K_M' }
-            Score        = $m.score
-            Params       = $m.params_b
-            Fit          = $m.fit_level
-            MemPct       = $m.utilization_pct
-        })
-    }
-
-    return $candidates
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Model selection: auto or interactive
-# ─────────────────────────────────────────────────────────────────────────────
-
-function Show-CandidateTable {
-    param([System.Collections.Generic.List[PSCustomObject]]$Candidates)
-
-    $colWidths = @{ N=3; Model=38; Params=7; Score=7; VRAM=6; Runner=10 }
-
-    $header  = " {0,-$($colWidths.N)} | {1,-$($colWidths.Model)} | {2,-$($colWidths.Params)} | {3,-$($colWidths.Score)} | {4,-$($colWidths.VRAM)} | {5,-$($colWidths.Runner)}" -f
-               '#', 'Model', 'Params', 'Score', 'VRAM%', 'Runner'
-    $divider = '-' * ($header.Length)
-
-    Write-Host ''
-    Write-Host "  $divider" -ForegroundColor DarkGray
-    Write-Host "  $header"  -ForegroundColor White
-    Write-Host "  $divider" -ForegroundColor DarkGray
-
-    foreach ($c in $Candidates) {
-        $modelLabel = if ($c.Runner -eq 'llamacpp') {
-            "$($c.GgufBasename) ($($c.Quantization))"
-        } else {
-            "$($c.OllamaTag)"
-        }
-        if ($modelLabel.Length -gt $colWidths.Model) {
-            $modelLabel = $modelLabel.Substring(0, $colWidths.Model - 1) + [char]0x2026
-        }
-        $runnerLabel = if ($c.Runner -eq 'llamacpp') { 'llama.cpp' } else { 'Ollama' }
-        $paramsStr = if ($null -ne $c.Params) {
-            $pNum = 0.0
-            $pStr = [string]$c.Params -replace 'B$',''
-            if ([double]::TryParse($pStr, [ref]$pNum)) { "$([math]::Round($pNum, 1))B" } else { [string]$c.Params }
-        } else { '?' }
-        $row = " {0,-$($colWidths.N)} | {1,-$($colWidths.Model)} | {2,-$($colWidths.Params)} | {3,-$($colWidths.Score)} | {4,-$($colWidths.VRAM)} | {5,-$($colWidths.Runner)}" -f
-               $c.Index,
-               $modelLabel,
-               $paramsStr,
-               ([math]::Round([double]$c.Score, 1)),
-               "$($c.MemPct)%",
-               $runnerLabel
-        $color = if ($c.Index -eq 1) { 'Yellow' } else { 'Gray' }
-        Write-Host "  $row" -ForegroundColor $color
-    }
-
-    Write-Host "  $divider" -ForegroundColor DarkGray
-    Write-Host ''
-}
-
-function Select-Model {
-    param(
-        [System.Collections.Generic.List[PSCustomObject]]$Candidates,
-        [bool]$IsManual
-    )
-
-    if ($Candidates.Count -eq 0) {
-        throw 'No usable candidates found. Try increasing -TopN (e.g. -TopN 30).'
-    }
-
-    Show-CandidateTable -Candidates $Candidates
-
-    if (-not $IsManual) {
-        Write-Info "Auto-selecting #1: $($Candidates[0].HfId)"
-        return $Candidates[0]
-    }
-
-    # Interactive prompt
-    while ($true) {
-        $raw = Read-Host "  Enter number [1-$($Candidates.Count)] or press Enter for #1"
-        if ([string]::IsNullOrWhiteSpace($raw)) { return $Candidates[0] }
-        $n = 0
-        if ([int]::TryParse($raw.Trim(), [ref]$n) -and $n -ge 1 -and $n -le $Candidates.Count) {
-            return $Candidates[$n - 1]
-        }
-        Write-Warn "  Please enter a number between 1 and $($Candidates.Count)."
-    }
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# llama-server runner
-# ─────────────────────────────────────────────────────────────────────────────
-
-function Build-LlamaServerArgs {
-    param([PSCustomObject]$Model, [string]$Token, [int]$Ctx, [int]$SrvPort)
-
-    $hfFile = "$($Model.GgufBasename)-$($Model.Quantization).gguf"
-    $a = [System.Collections.Generic.List[string]]::new()
-    $a.AddRange([string[]]@('--hf-repo', $Model.GgufRepo))
-    $a.AddRange([string[]]@('--hf-file', $hfFile))
-    $a.AddRange([string[]]@('-c', $Ctx))
-    $a.AddRange([string[]]@('--host', '127.0.0.1'))
-    $a.AddRange([string[]]@('--port', $SrvPort))
-    $a.Add('--jinja')
-    if ($Model.Template -and $Model.Template -ne '') {
-        $a.AddRange([string[]]@('--chat-template', $Model.Template))
-    }
-    if ($Token -and $Token -ne '') { $env:HF_TOKEN = $Token }
-    return $a.ToArray()
-}
-
-function Start-LlamaServer {
-    param([PSCustomObject]$Model, [string]$Token, [int]$Ctx, [int]$SrvPort)
-
-    $apiRoot    = "http://127.0.0.1:$SrvPort"
-    $healthUrl  = "$apiRoot/health"
-    $hfFile     = "$($Model.GgufBasename)-$($Model.Quantization).gguf"
-
-    try {
-        $r = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 3 -ErrorAction Stop
-        if ($r.status -eq 'ok') { Write-Ok "llama-server already running on $apiRoot"; return $apiRoot }
-    } catch {}
-
-    Write-Step "Starting llama-server  ($($Model.GgufRepo) / $hfFile)"
-    $hfCachePath = Join-Path $env:USERPROFILE '.cache\huggingface\hub'
-    $cachedFile  = Get-ChildItem -Path $hfCachePath -Filter $hfFile -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($cachedFile) {
-        Write-Info "Model cached at: $($cachedFile.FullName)"
-        Write-Info 'llama-server will load from cache (no download needed).'
-    } else {
-        Write-Info 'Model not yet cached — llama-server will download from HuggingFace (may take several minutes).'
-    }
-
-    $serverArgs = Build-LlamaServerArgs -Model $Model -Token $Token -Ctx $Ctx -SrvPort $SrvPort
-    Write-Info "  llama-server $($serverArgs -join ' ')"
-
-    Start-Process -FilePath 'llama-server' -ArgumentList $serverArgs -WindowStyle Minimized
-
-    $timeout = 600; $interval = 5; $elapsed = 0; $ready = $false
-    Write-Host '     Waiting' -NoNewline -ForegroundColor Gray
-    while ($elapsed -lt $timeout) {
-        Start-Sleep -Seconds $interval; $elapsed += $interval
-        Write-Host '.' -NoNewline -ForegroundColor Gray
-        try {
-            $r = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 2 -ErrorAction Stop
-            if ($r.status -eq 'ok') { $ready = $true; break }
-        } catch {}
-    }
-    Write-Host ''
-
-    if (-not $ready) { throw "llama-server did not become ready within ${timeout}s. Check the minimised window." }
-    Write-Ok "llama-server ready  ($apiRoot)"
-    return $apiRoot
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Ollama runner
-# ─────────────────────────────────────────────────────────────────────────────
-
-function Start-OllamaModel {
-    param([PSCustomObject]$Model, [int]$Ctx)
-
-    $tag        = $Model.OllamaTag
-    $apiRoot    = 'http://localhost:11434'
-    $variantTag = ($tag -replace ':', '-') + "-ctx$([int]($Ctx/1024))k"
-
-    # Pull base model if not present
-    $listOut = & ollama list 2>&1
-    if ($listOut -notmatch [regex]::Escape($tag)) {
-        Write-Step "Pulling '$tag' via Ollama"
-        & ollama pull $tag
-        if ($LASTEXITCODE -ne 0) { throw "ollama pull $tag failed." }
-        Write-Ok "Model '$tag' pulled"
-    } else {
-        Write-Ok "Base model '$tag' already present"
-    }
-
-    # Create context-extended variant
-    $listOut = & ollama list 2>&1
-    if ($listOut -notmatch [regex]::Escape($variantTag)) {
-        Write-Step "Creating context-extended variant '$variantTag'  (num_ctx=$Ctx)"
-        $modelfile = "FROM $tag`nPARAMETER num_ctx $Ctx"
-        $tmpFile   = Join-Path $env:TEMP 'AutoLocalLLM.Modelfile'
-        Set-Content -Path $tmpFile -Value $modelfile -Encoding utf8
-        & ollama create $variantTag --file $tmpFile
-        if ($LASTEXITCODE -ne 0) { throw "ollama create $variantTag failed." }
-        Remove-Item $tmpFile -ErrorAction SilentlyContinue
-        Write-Ok "Variant '$variantTag' created"
-    } else {
-        Write-Ok "Context variant '$variantTag' already exists"
-    }
-
-    return @{ apiRoot = $apiRoot; modelTag = $variantTag }
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# OpenCode configuration
-# ─────────────────────────────────────────────────────────────────────────────
-
-function Update-OpenCodeConfig {
-    param([string]$ModelId, [string]$DisplayName, [string]$ApiBase, [string]$Runner)
-
-    $configDir  = Join-Path $env:USERPROFILE '.config\opencode'
-    $configPath = Join-Path $configDir 'config.json'
-    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-
-    $cfg = @{}
-    if (Test-Path $configPath) {
-        try { $cfg = Get-Content $configPath -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable }
-        catch { $cfg = @{} }
-    }
-
-    if (-not $cfg.ContainsKey('$schema'))  { $cfg['$schema']  = 'https://opencode.ai/config.json' }
-    if (-not $cfg.ContainsKey('provider')) { $cfg['provider'] = @{} }
-
-    $providerKey  = if ($Runner -eq 'llamacpp') { 'llama-cpp' } else { 'ollama' }
-    $providerName = if ($Runner -eq 'llamacpp') { 'llama.cpp Local' } else { 'Ollama Local' }
-
-    if (-not $cfg['provider'].ContainsKey($providerKey)) {
-        $cfg['provider'][$providerKey] = @{
-            npm     = '@ai-sdk/openai-compatible'
-            name    = $providerName
-            options = @{ baseURL = "$ApiBase/v1" }
-            models  = @{}
-        }
-    }
-
-    $provider = $cfg['provider'][$providerKey]
-    if (-not $provider.ContainsKey('models')) { $provider['models'] = @{} }
-    $provider['models'][$ModelId] = @{ name = $DisplayName; tools = $true }
-
-    $cfg | ConvertTo-Json -Depth 10 | Set-Content -Path $configPath -Encoding utf8
-    Write-Ok "OpenCode config written: $configPath"
-    return $configPath
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Startup helper script
-# ─────────────────────────────────────────────────────────────────────────────
-
-function Write-StartupScript {
-    param([PSCustomObject]$Model, [string]$Token, [int]$Ctx, [int]$SrvPort)
-
-    $scriptPath = Join-Path $script:LlamaCppDir 'Start-LlamaServer.ps1'
-
-    if ($Model.Runner -eq 'llamacpp') {
-        $serverArgs = Build-LlamaServerArgs -Model $Model -Token $Token -Ctx $Ctx -SrvPort $SrvPort
-        $argsLine   = ($serverArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '
-        $tokenLine  = if ($Token) { "`$env:HF_TOKEN = '$Token'" } else {
-            '# $env:HF_TOKEN = "hf_xxx"   # uncomment if model requires auth'
-        }
-        $content = @"
-# Auto-generated by Setup-OpenCode-LLM.ps1  (runner: llama.cpp)
-# Run this before using OpenCode when llama-server is not already running.
-
-Set-StrictMode -Version Latest
-`$ErrorActionPreference = 'Stop'
-
-$tokenLine
-
-`$healthUrl = "http://127.0.0.1:$SrvPort/health"
-try {
-    if ((Invoke-RestMethod -Uri `$healthUrl -TimeoutSec 2).status -eq 'ok') {
-        Write-Host "llama-server already running."; exit 0
-    }
-} catch {}
-
-Write-Host "Starting llama-server on http://127.0.0.1:$SrvPort ..."
-llama-server $argsLine
-"@
-    } else {
-        $tag        = $Model.OllamaTag
-        $variantTag = ($tag -replace ':', '-') + "-ctx$([int]($Ctx/1024))k"
-        $content = @"
-# Auto-generated by Setup-OpenCode-LLM.ps1  (runner: Ollama)
-# Run this before using OpenCode when Ollama is not already running.
-
-Set-StrictMode -Version Latest
-`$ErrorActionPreference = 'Stop'
-
-try {
-    if (Invoke-RestMethod -Uri 'http://localhost:11434/api/tags' -TimeoutSec 2) {
-        Write-Host "Ollama already running."; exit 0
-    }
-} catch {}
-
-Write-Host "Starting Ollama..."
-Start-Process -FilePath 'ollama' -ArgumentList 'serve' -WindowStyle Hidden
-Start-Sleep -Seconds 3
-Write-Host "Ollama model: $variantTag"
-ollama run $variantTag --keepalive -1
-"@
-    }
-
-    Set-Content -Path $scriptPath -Value $content -Encoding utf8
-    Write-Ok "Startup script: $scriptPath"
-    return $scriptPath
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-Write-Host ''
-Write-Host '  +------------------------------------------------------------+' -ForegroundColor Magenta
-Write-Host '  |    AutoLocalLLM  --  LlmFit -> llama.cpp -> OpenCode      |' -ForegroundColor Magenta
-Write-Host '  +------------------------------------------------------------+' -ForegroundColor Magenta
-if ($Manual) {
-Write-Host '  Mode: manual selection' -ForegroundColor DarkCyan
-} else {
-Write-Host '  Mode: auto  (use -Manual to pick from a list)' -ForegroundColor DarkGray
-}
-Write-Host ''
-
 try {
-    # 1. Core prerequisites (always needed)
+    if (-not (Test-Path $script:PythonHelper)) {
+        throw "Helper not found: $($script:PythonHelper)  (run from the cloned repo directory)"
+    }
+
+    # 1. Install prerequisites
     Write-Step 'Checking prerequisites'
     Install-Scoop
+    Install-Python
     Install-LlamaCpp
     Install-LlmFit
     Install-OpenCode
 
-    # 2. Build ranked candidate list from LlmFit
-    $candidates = Get-CodingCandidates -Limit $TopN
+    # 2. Hand off to Python orchestrator
+    New-Item -ItemType Directory -Path $script:ShareDir -Force | Out-Null
 
-    # 3. Let user pick (or auto-select #1)
-    $model = Select-Model -Candidates $candidates -IsManual $Manual.IsPresent
+    $pyArgs = @('setup')
+    if ($Manual)      { $pyArgs += '--manual' }
+    if ($Force)       { $pyArgs += '--force'  }
+    if ($Update)      { $pyArgs += '--update' }
+    if ($TopN -gt 0)  { $pyArgs += @('--top-n',    $TopN)        }
+    if ($HfToken)     { $pyArgs += @('--hf-token',  $HfToken)    }
+    $pyArgs += @('--port',      $Port)
+    $pyArgs += @('--context',   $ContextSize)
+    $pyArgs += @('--bin-dir',   $script:LlamaBinDir)
+    $pyArgs += @('--lib-dir',   $script:LlamaBinDir)
+    $pyArgs += @('--share-dir', $script:ShareDir)
 
-    Write-Host ''
-    Write-Host '  Chosen model' -ForegroundColor White
-    Write-Info "HuggingFace : $($model.HfId)"
-    Write-Info "Runner      : $($model.Runner)"
-    if ($model.Runner -eq 'llamacpp') {
-        Write-Info "GGUF repo   : $($model.GgufRepo)"
-        Write-Info "File        : $($model.GgufBasename)-$($model.Quantization).gguf"
-    } else {
-        Write-Info "Ollama tag  : $($model.OllamaTag)"
-    }
-    Write-Info "Score       : $($model.Score)   Params: $($model.Params)B   VRAM: $($model.MemPct)%"
-
-    # 4. Launch model server (installs Ollama if needed)
-    $apiBase = ''; $modelId = ''; $displayName = ''
-
-    if ($model.Runner -eq 'llamacpp') {
-        $apiBase     = Start-LlamaServer -Model $model -Token $HfToken -Ctx $ContextSize -SrvPort $Port
-        $modelId     = "$($model.GgufBasename)-$($model.Quantization)".ToLower()
-        $displayName = "$($model.GgufBasename) ($($model.Quantization), ctx=$ContextSize)"
-    } else {
-        Install-Ollama
-        Start-OllamaDaemon
-        $result      = Start-OllamaModel -Model $model -Ctx $ContextSize
-        $apiBase     = $result.apiRoot
-        $modelId     = $result.modelTag
-        $displayName = "$($model.OllamaTag) (ctx=$ContextSize)"
-    }
-
-    # 5. Write OpenCode config
-    $cfgPath = Update-OpenCodeConfig -ModelId $modelId -DisplayName $displayName `
-                                      -ApiBase $apiBase -Runner $model.Runner
-
-    # 6. Write startup helper
-    $startScript = Write-StartupScript -Model $model -Token $HfToken -Ctx $ContextSize -SrvPort $Port
-
-    # 7. Done
-    Write-Host ''
-    Write-Host '  +------------------------------------------------------------+' -ForegroundColor Green
-    Write-Host '  |                    Setup Complete!                         |' -ForegroundColor Green
-    Write-Host '  +------------------------------------------------------------+' -ForegroundColor Green
-    Write-Host ''
-    Write-Host "  Model    : $modelId"    -ForegroundColor Yellow
-    Write-Host "  Server   : $apiBase"    -ForegroundColor Yellow
-    Write-Host "  Config   : $cfgPath"    -ForegroundColor Yellow
-    Write-Host "  Relaunch : $startScript" -ForegroundColor Yellow
-    Write-Host ''
-    Write-Host '  Start coding now:' -ForegroundColor White
-    Write-Host '    opencode' -ForegroundColor Cyan
-    Write-Host ''
-    Write-Host '  Press Ctrl+K inside OpenCode to open the model picker, then select:' -ForegroundColor White
-    $providerLabel = if ($model.Runner -eq 'llamacpp') { 'llama-cpp' } else { 'ollama' }
-    Write-Host "    $providerLabel > $modelId" -ForegroundColor Cyan
-    Write-Host ''
-    Write-Host "  After a reboot, restart the model server with:" -ForegroundColor Gray
-    Write-Host "    $startScript" -ForegroundColor Gray
-    Write-Host ''
+    & python $script:PythonHelper @pyArgs
+    if ($LASTEXITCODE -ne 0) { throw "llm-setup-helper.py exited with code $LASTEXITCODE" }
 
 } catch {
     Write-Host ''

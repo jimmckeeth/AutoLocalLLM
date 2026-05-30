@@ -149,9 +149,15 @@ TMP_FILES+=("$PYTHON_HELPER")
 cat > "$PYTHON_HELPER" << 'PYEOF'
 #!/usr/bin/env python3
 """AutoLocalLLM helper — LlmFit filtering, table display, config writer."""
-import json, sys, os
+import json, sys, os, glob
 
 PREF_PROVIDERS = ['bartowski', 'unsloth', 'mradermacher']
+
+def is_cached(repo, filename):
+    hf_cache = os.path.expanduser('~/.cache/huggingface/hub')
+    repo_dir  = 'models--' + repo.replace('/', '--')
+    pattern   = os.path.join(hf_cache, repo_dir, 'snapshots', '*', filename)
+    return bool(glob.glob(pattern))
 
 def build_candidates(models):
     candidates = []
@@ -171,6 +177,7 @@ def build_candidates(models):
         repo     = source['repo']
         basename = repo.split('/')[-1].removesuffix('-GGUF')
         quant    = m.get('best_quant') or 'Q4_K_M'
+        filename = f'{basename}-{quant}.gguf'
         candidates.append({
             'index':         len(candidates) + 1,
             'hf_id':         hf_id,
@@ -183,6 +190,8 @@ def build_candidates(models):
             'score':         round(float(m.get('score') or 0), 1),
             'params':        m.get('params_b'),
             'mem_pct':       m.get('utilization_pct', '?'),
+            'disk_gb':       m.get('disk_size_gb'),
+            'cached':        is_cached(repo, filename),
         })
     return candidates
 
@@ -198,9 +207,9 @@ def cmd_filter():
 def cmd_table():
     candidates = json.load(sys.stdin)
     W = 36
-    div = '─' * 70
+    div = '─' * 84
     print(f'\n  {div}')
-    print(f"  {'#':<3} | {'Model':<{W}} | {'Params':<7} | {'Score':<5} | {'VRAM%':<5} | {'Runner':<9}")
+    print(f"  {'#':<3} | {'Model':<{W}} | {'Params':<7} | {'Score':<5} | {'VRAM%':<5} | {'Size':<6} | {'Cached'}")
     print(f'  {div}')
     for c in candidates:
         if c['runner'] == 'llamacpp':
@@ -218,7 +227,9 @@ def cmd_table():
         except (ValueError, TypeError):
             params = str(c['params'])
         mem    = f"{c['mem_pct']}%" if c['mem_pct'] is not None else '?'
-        print(f'  {color}{c["index"]:<3} | {label:<{W}} | {params:<7} | {c["score"]:<5} | {mem:<5} | {runner:<9}{reset}')
+        disk   = f"{c['disk_gb']:.1f}G"  if c.get('disk_gb') is not None else '?'
+        cached = '\033[32m yes\033[0m' if c.get('cached') else '\033[90m no\033[0m'
+        print(f'  {color}{c["index"]:<3} | {label:<{W}} | {params:<7} | {c["score"]:<5} | {mem:<5} | {disk:<6}{reset} | {cached}')
     print(f'  {div}\n')
 
 def cmd_get():
@@ -697,24 +708,26 @@ start_llama_server() {
     info "PID ${server_pid}  log: ${log_file}"
 
     # Poll /health (up to 10 min — large model download + load)
-    local timeout=600 interval=5 elapsed=0
-    printf '     Waiting'
+    local timeout=600 interval=3 elapsed=0
+    printf '\n'
     while (( elapsed < timeout )); do
         sleep "$interval"; elapsed=$(( elapsed + interval ))
-        printf '.'
+        # Show last non-empty log line as a live progress indicator
+        local last
+        last=$(grep -v '^[[:space:]]*$' "$log_file" 2>/dev/null | tail -1 | sed 's/^[[:space:]]*//' | cut -c1-75)
+        printf '\r     \033[90m%-75s\033[0m' "${last:-starting…}"
         if curl -fsS "${api_root}/health" 2>/dev/null | grep -q '"ok"'; then
-            echo ""
+            printf '\n'
             ok "llama-server ready  (${api_root})"
             RUNNER_API_ROOT="$api_root"
             return
         fi
-        # Check if server crashed
         if ! kill -0 "$server_pid" 2>/dev/null; then
-            echo ""
+            printf '\n'
             die "llama-server exited unexpectedly. Check log: ${log_file}"
         fi
     done
-    echo ""
+    printf '\n'
     die "llama-server did not become ready within ${timeout}s. Check log: ${log_file}"
 }
 

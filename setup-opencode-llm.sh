@@ -605,7 +605,9 @@ get_candidates() {
         || die "Failed to count candidates."
 
     info "Found ${count} candidate(s)"
-    [[ "$count" -eq 0 ]] && die "No candidates found. Try --top-n 30 or check that llmfit supports your hardware."
+    if [[ "$count" -eq 0 ]]; then
+        die "No candidates found. Check that llmfit supports your hardware or relax --min-fit."
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -615,6 +617,7 @@ get_candidates() {
 SELECTED_JSON=""
 
 select_model() {
+    step "Candidate models"
     echo "$CANDIDATES_JSON" | py table \
         || die "Failed to display candidate table (Python error above)."
 

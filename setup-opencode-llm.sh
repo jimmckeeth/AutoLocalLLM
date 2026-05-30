@@ -11,13 +11,13 @@
 #   ./setup-opencode-llm.sh [OPTIONS]
 #
 # Options:
-#   --manual  | -manual | -m          Show ranked candidate list; pick a model interactively
-#   --top-n N | -top-n N | -n N       Candidates to request from LlmFit   (default: 20)
-#   --context N | -context N | -c N   Context window size in tokens        (default: 16384)
-#   --port N  | -port N  | -p N       llama-server port                    (default: 8080)
+#   --manual    | -manual | -m          Show ranked candidate list; pick a model interactively
+#   --top-n N   | -top-n N | -n N       Cap candidates returned from LlmFit  (default: all)
+#   --context N | -context N | -c N     Context window size in tokens        (default: 16384)
+#   --port N    | -port N  | -p N       llama-server port                    (default: 8080)
+#   --force     | -force  | -f          Re-download and overwrite config
 #   --hf-token TOKEN | -hf-token TOKEN  HuggingFace token for gated models
-#   --force   | -force  | -f          Re-download and overwrite config
-#   --help    | -h                    Show this message
+#   --help      | -h                    Show this message
 
 set -euo pipefail
 
@@ -25,7 +25,7 @@ set -euo pipefail
 # Defaults
 # ─────────────────────────────────────────────────────────────────────────────
 
-TOP_N=20
+TOP_N=""
 CONTEXT_SIZE=16384
 PORT=8080
 HF_TOKEN=""
@@ -581,14 +581,21 @@ install_ollama() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 get_candidates() {
-    step "Querying LlmFit: top ${TOP_N} coding models for this hardware"
+    step "Updating LlmFit model cache"
+    llmfit update 2>/dev/null || warn "llmfit update failed — using cached data (may be stale)"
+
+    local limit_label="${TOP_N:+top ${TOP_N} }coding models for this hardware"
+    step "Querying LlmFit: ${limit_label}"
 
     local llmfit_err
     llmfit_err=$(mktemp /tmp/autolocalllm_llmfit_err_XXXXXX)
     TMP_FILES+=("$llmfit_err")
 
+    local -a llmfit_args=(recommend --json --use-case coding --capability tool_use --min-fit good)
+    [[ -n "$TOP_N" ]] && llmfit_args+=(--limit "$TOP_N")
+
     local raw
-    raw=$(llmfit recommend --json --use-case coding --capability tool_use --runtime llamacpp --min-fit good --limit "$TOP_N" 2>"$llmfit_err") \
+    raw=$(llmfit "${llmfit_args[@]}" 2>"$llmfit_err") \
         || die "LlmFit failed (exit $?). Stderr: $(cat "$llmfit_err")"
 
     CANDIDATES_JSON=$(echo "$raw" | py filter) \

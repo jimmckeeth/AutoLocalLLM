@@ -101,11 +101,16 @@ detect_distro() {
                 DISTRO="fedora" ;;   # dnf-compatible
             nixos)
                 DISTRO="nixos" ;;
+            arch|manjaro|endeavouros|garuda|cachyos)
+                DISTRO="arch" ;;
+            steamos)
+                DISTRO="arch" ;;    # Steam Deck
             *)
                 case "${ID_LIKE:-}" in
                     *debian*|*ubuntu*)  DISTRO="debian" ;;
                     *fedora*|*rhel*)    DISTRO="fedora" ;;
                     *nixos*)            DISTRO="nixos"  ;;
+                    *arch*)             DISTRO="arch"   ;;
                 esac ;;
         esac
     fi
@@ -130,6 +135,7 @@ nix_install()  {
             || warn "nix: could not install ${pkg} — install manually"
     done
 }
+pacman_install() { sudo pacman -S --noconfirm "$@"; }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Python helper script (model DB + JSON ops)
@@ -313,6 +319,10 @@ install_base_tools() {
             have curl    || nix_install curl
             have python3 || nix_install python3
             ;;
+        arch)
+            have curl    || pacman_install curl
+            have python3 || pacman_install python
+            ;;
     esac
     have curl    || die "curl is required but could not be installed."
     have python3 || die "python3 is required but could not be installed."
@@ -401,7 +411,12 @@ PYEOF
     rm -rf "${tmp_dir}"
 
     [[ ":$PATH:" != *":${BIN_DIR}:"* ]] && export PATH="${BIN_DIR}:${PATH}"
-    have llama-server || die "llama-server not found after extraction. Check ${BIN_DIR}"
+    if ! have llama-server; then
+        printf "\n     ${YELLOW}**  llama-server not found after extraction.${RESET}\n"
+        printf   "     ${YELLOW}**  Check ${BIN_DIR} or install llama.cpp manually:${RESET}\n"
+        printf   "     ${YELLOW}**    https://github.com/ggml-org/llama.cpp/releases${RESET}\n\n"
+        exit 1
+    fi
     ok "llama.cpp installed to ${BIN_DIR}"
 }
 
@@ -464,6 +479,23 @@ PYEOF
     ok "LlmFit installed to ${BIN_DIR}"
 }
 
+install_node_via_nvm() {
+    info "Installing Node.js via nvm (no root required)..."
+    local nvm_dir="${HOME}/.nvm"
+    if [[ ! -s "${nvm_dir}/nvm.sh" ]]; then
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash \
+            || die "nvm installation failed."
+    fi
+    export NVM_DIR="$nvm_dir"
+    # shellcheck source=/dev/null
+    source "${nvm_dir}/nvm.sh"
+    have nvm || die "nvm not available after installation."
+    nvm install 20 || die "nvm install 20 failed."
+    nvm use 20
+    nvm alias default 20 2>/dev/null || true
+    ok "Node.js $(node --version) installed via nvm"
+}
+
 install_node_npm() {
     if have node && node -e "process.exit(parseInt(process.version.slice(1)) >= 20 ? 0 : 1)" 2>/dev/null; then
         ok "Node.js $(node --version) already installed"; return
@@ -483,7 +515,17 @@ install_node_npm() {
         nixos)
             nix_install nodejs_20
             ;;
+        arch)
+            # Steam Deck has an immutable rootfs by default; pacman may fail — nvm is the reliable fallback
+            pacman_install nodejs npm 2>/dev/null || install_node_via_nvm
+            ;;
     esac
+
+    # Universal fallback: if still no node, try nvm
+    if ! have node; then
+        install_node_via_nvm
+    fi
+
     have npm || die "npm not found after Node.js install."
     ok "Node.js $(node --version) installed"
 }
@@ -493,6 +535,17 @@ install_opencode() {
 
     step "Installing OpenCode"
     install_node_npm
+
+    # If the npm global prefix is not writable (e.g. Steam Deck immutable rootfs),
+    # redirect to a user-writable location before installing opencode.
+    local npm_prefix
+    npm_prefix=$(npm prefix -g 2>/dev/null)
+    if [[ -n "$npm_prefix" && ! -w "$npm_prefix" ]]; then
+        local fallback_prefix="${HOME}/.npm-global"
+        info "npm global prefix ${npm_prefix} is not writable; using ${fallback_prefix}"
+        mkdir -p "$fallback_prefix"
+        npm config set prefix "$fallback_prefix"
+    fi
 
     # npm global installs land in $(npm prefix -g)/bin — make sure it's on PATH
     local npm_global_bin

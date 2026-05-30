@@ -33,6 +33,7 @@ MANUAL=false
 FORCE=false
 
 BIN_DIR="${HOME}/.local/bin"
+LIB_DIR="${HOME}/.local/lib"
 SHARE_DIR="${HOME}/.local/share/autolocalllm"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -394,18 +395,18 @@ PYEOF
     curl -fsSL --progress-bar -o "${tmp_dir}/${archive}" "$asset_url" \
         || die "Download failed: $asset_url"
 
-    mkdir -p "$BIN_DIR"
+    mkdir -p "$BIN_DIR" "$LIB_DIR"
     tar -xzf "${tmp_dir}/${archive}" -C "${tmp_dir}"
 
-    # Copy llama-server (and companion libs) into BIN_DIR
+    # Copy llama-server binary into BIN_DIR
     find "${tmp_dir}" -name 'llama-server' -type f | while read -r bin; do
         cp "$bin" "$BIN_DIR/llama-server"
         chmod +x "$BIN_DIR/llama-server"
     done
 
-    # Copy any .so files needed at runtime into BIN_DIR
+    # Copy shared libraries into LIB_DIR so the dynamic linker can find them
     find "${tmp_dir}" -name '*.so*' -type f | while read -r lib; do
-        cp "$lib" "$BIN_DIR/" 2>/dev/null || true
+        cp "$lib" "$LIB_DIR/" 2>/dev/null || true
     done
 
     rm -rf "${tmp_dir}"
@@ -690,6 +691,7 @@ start_llama_server() {
     mkdir -p "$SHARE_DIR"
     local log_file="${SHARE_DIR}/llama-server.log"
 
+    export LD_LIBRARY_PATH="${LIB_DIR}:${BIN_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     llama-server "${server_args[@]}" > "$log_file" 2>&1 &
     local server_pid=$!
     info "PID ${server_pid}  log: ${log_file}"
@@ -813,6 +815,7 @@ write_startup_script() {
 
 set -euo pipefail
 
+export LD_LIBRARY_PATH="${LIB_DIR}:${BIN_DIR}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
 ${token_line}
 
 API_ROOT="http://127.0.0.1:${PORT}"
